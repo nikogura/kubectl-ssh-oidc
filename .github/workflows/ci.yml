@@ -2,43 +2,84 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, develop ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   pull_request:
     branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+
+env:
+  GO_VERSION: '1.24'
 
 jobs:
   test:
+    name: Unit, Lint, and End-to-End Integration Tests
     runs-on: ubuntu-latest
-    outputs:
-      semver: ${{steps.semver.outputs.version_tag}}
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Cache Docker layers
+      uses: actions/cache@v4
+      with:
+        path: /tmp/.buildx-cache
+        key: ${{ runner.os }}-buildx-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-buildx-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run unit tests first
+      run: make test
+
+    - name: Run linting
+      run: make lint
+
+    - name: Run integration tests
+      run: make test-integration
+      timeout-minutes: 10
 
     - name: Semver
       uses: paulhatch/semantic-version@v5.1.0
       with:
         bump_each_commit: true
       id: semver
-    
-    - name: Set up Go
-      uses: actions/setup-go@v5
+
+    - name: Upload test logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
       with:
-        go-version: '1.24.7'
-    
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-    
-    - name: Run tests
-      run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
-    
-    # - name: Upload coverage to Codecov
-    #   uses: codecov/codecov-action@v4
-    #   with:
-    #     file: ./coverage.txt
-    #     token: ${{ secrets.CODECOV_TOKEN }}
-    #     verbose: true
+        name: integration-test-logs-${{ github.run_id }}
+        path: |
+          test/integration/*.log
+          /tmp/kubectl-ssh-oidc-integration-*/
+        retention-days: 7
+
+    - name: Clean up integration environment
+      if: always()
+      run: make clean-integration
 
   publish:
     runs-on: ubuntu-latest

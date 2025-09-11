@@ -1,0 +1,20 @@
+{
+  "kind": "PodList",
+  "apiVersion": "v1",
+  "metadata": {
+    "resourceVersion": "123456"
+  },
+  "items": [
+    {
+      "kind": "Pod",
+      "apiVersion": "v1",
+      "metadata": {
+        "name": "test-pod",
+        "namespace": "default"
+      },
+      "status": {
+        "phase": "Running"
+      }
+    }
+  ]
+}

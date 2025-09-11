@@ -1,0 +1,48 @@
+issuer: http://localhost:5556/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+logger:
+  level: "debug"
+
+connectors:
+- type: ssh
+  id: ssh
+  name: SSH Key Authentication
+  config:
+    users:
+      "test-user":
+        keys:
+        - "SHA256:anwBv8OdPTZNsC3Und/btMdqxE71uYUugjkztuUhLH0"
+        - "SHA256:LzKNhWlSG7V7z3nhebyilCadN10jF6mNX6StO8FZ1iM"
+        username: "test-user"
+        email: "test-user@example.com"
+        groups:
+        - "developers"
+        - "kubernetes-users"
+      "another-user":
+        keys:
+        - "SHA256:4wMtClwjjbq6znF1DhoRTijpisje/QNkdfujTrNT8NE"
+        username: "another-user"
+        email: "another-user@example.com"
+        groups:
+        - "admins"
+    
+    allowed_issuers:
+    - "kubectl-ssh-oidc"
+    
+    default_groups:
+    - "authenticated"
+    
+    token_ttl: 3600
+
+staticClients:
+- id: kubectl-ssh-oidc
+  redirectURIs:
+  - 'http://localhost:8000/callback'
+  name: 'kubectl SSH OIDC'
+  secret: ZXhhbXBsZS1hcHAtc2VjcmV0

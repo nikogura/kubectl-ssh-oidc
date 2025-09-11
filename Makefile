@@ -70,6 +70,31 @@ test-coverage: test
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
 
+# Run integration tests with custom Dex
+.PHONY: test-integration
+test-integration:
+	@echo "Running end-to-end integration tests..."
+	./test/integration/run-integration-tests.sh
+
+# Build custom Dex image for integration testing
+.PHONY: build-dex
+build-dex:
+	@echo "Building custom Dex image with SSH connector..."
+	docker build -f docker/dex/Dockerfile -t kubectl-ssh-oidc/dex:latest docker/dex/
+
+# Verify custom Dex image works correctly
+.PHONY: verify-dex
+verify-dex:
+	@echo "Verifying custom Dex image..."
+	./test/integration/run-integration-tests.sh --verify
+
+# Clean up integration test containers and images
+.PHONY: clean-integration
+clean-integration:
+	@echo "Cleaning up integration test environment..."
+	./test/integration/run-integration-tests.sh --cleanup
+	docker images -q "kubectl-ssh-oidc/dex" | xargs -r docker rmi -f 2>/dev/null || true
+
 # Lint the code
 .PHONY: lint
 lint:
@@ -102,17 +127,21 @@ help:
 	@echo "kubectl-ssh-oidc Makefile"
 	@echo ""
 	@echo "Available targets:"
-	@echo "  build         Build the binary"
-	@echo "  build-all     Cross-compile for multiple platforms"
-	@echo "  install       Install to user's local bin directory"
-	@echo "  install-system Install system-wide (requires sudo)"
-	@echo "  test          Run tests"
-	@echo "  test-coverage Run tests with coverage report"
-	@echo "  lint          Lint the code"
-	@echo "  fmt           Format the code"
-	@echo "  tidy          Tidy dependencies"
-	@echo "  clean         Clean build artifacts"
-	@echo "  help          Show this help"
+	@echo "  build           Build the binary"
+	@echo "  build-all       Cross-compile for multiple platforms"
+	@echo "  build-dex       Build custom Dex image with SSH connector"
+	@echo "  install         Install to user's local bin directory"
+	@echo "  install-system  Install system-wide (requires sudo)"
+	@echo "  test            Run unit tests"
+	@echo "  test-coverage   Run tests with coverage report"
+	@echo "  test-integration Run end-to-end integration tests"
+	@echo "  verify-dex      Verify custom Dex image works"
+	@echo "  clean-integration Clean integration test environment"
+	@echo "  lint            Lint the code"
+	@echo "  fmt             Format the code"
+	@echo "  tidy            Tidy dependencies"
+	@echo "  clean           Clean build artifacts"
+	@echo "  help            Show this help"
 	@echo ""
 	@echo "Environment variables:"
 	@echo "  VERSION       Version to build (default: v1.0.0)"
