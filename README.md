@@ -120,14 +120,39 @@ connectors:
   id: ssh
   name: SSH Key Authentication
   config:
-    authorized_keys:
-      "SHA256:your-ssh-key-fingerprint":
+    # New format: Multiple keys per user (recommended)
+    users:
+      "john.doe":
+        keys:
+        - "SHA256:work-laptop-key-fingerprint"
+        - "SHA256:home-desktop-key-fingerprint" 
+        - "SHA256:yubikey-ssh-key-fingerprint"
         username: "john.doe"
         email: "john.doe@example.com"
         full_name: "John Doe"
         groups:
         - "developers"
         - "kubernetes-users"
+      
+      "jane.smith":
+        keys:
+        - "SHA256:jane-work-key-fingerprint"
+        - "SHA256:jane-personal-key-fingerprint"
+        username: "jane.smith"
+        email: "jane.smith@example.com"
+        full_name: "Jane Smith"
+        groups:
+        - "developers"
+        - "team-leads"
+    
+    # Legacy format: One key per user (deprecated but still supported)
+    # authorized_keys:
+    #   "SHA256:legacy-key-fingerprint":
+    #     username: "legacy.user"
+    #     email: "legacy@example.com"
+    #     full_name: "Legacy User"
+    #     groups:
+    #     - "legacy-group"
     
     allowed_issuers:
     - "kubectl-ssh-oidc"
@@ -392,6 +417,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 📞 Support
 
 - 📖 [Usage Documentation](Usage.md)
+- 🏠 [Architecture & Technical Details](ARCHITECTURE.md)
+- ⚠️ [Limitations & Known Issues](LIMITATIONS.md)
+- 🔑 [SSH Key Iteration Pattern](SSH_KEY_ITERATION.md)
 - 🐛 [Issue Tracker](https://github.com/nikogura/kubectl-ssh-oidc/issues)
 - 💬 [Discussions](https://github.com/nikogura/kubectl-ssh-oidc/discussions)
 

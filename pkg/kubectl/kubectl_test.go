@@ -219,6 +219,59 @@ func TestSSHAgentClient_SignData(t *testing.T) {
 	}
 }
 
+func TestSSHAgentClient_SignWithKey(t *testing.T) {
+	tests := []struct {
+		name          string
+		mockSetup     func(*mocks.MockExtendedAgent, *agent.Key)
+		data          []byte
+		expectedError string
+	}{
+		{
+			name: "successful signing with specific key",
+			mockSetup: func(m *mocks.MockExtendedAgent, key *agent.Key) {
+				m.On("Sign", key, mock.AnythingOfType("[]uint8")).
+					Return(testdata.TestSSHSignature(), nil)
+			},
+			data: []byte("test data to sign"),
+		},
+		{
+			name: "signing fails with specific key",
+			mockSetup: func(m *mocks.MockExtendedAgent, key *agent.Key) {
+				m.On("Sign", key, mock.AnythingOfType("[]uint8")).
+					Return((*ssh.Signature)(nil), errors.New("hardware key locked"))
+			},
+			data:          []byte("test data"),
+			expectedError: "failed to sign data",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockAgent := &mocks.MockExtendedAgent{}
+			testKey, err := testdata.CreateTestAgentKey()
+			require.NoError(t, err)
+
+			tt.mockSetup(mockAgent, testKey)
+
+			client := &SSHAgentClient{agent: mockAgent}
+			signature, pubKey, err := client.SignWithKey(testKey, tt.data)
+
+			if tt.expectedError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectedError)
+				assert.Nil(t, signature)
+				assert.Nil(t, pubKey)
+			} else {
+				require.NoError(t, err)
+				assert.NotNil(t, signature)
+				assert.NotNil(t, pubKey)
+			}
+
+			mockAgent.AssertExpectations(t)
+		})
+	}
+}
+
 func TestCreateSSHSignedJWT(t *testing.T) {
 	// This test requires more complex setup since it involves creating actual SSH keys
 	// and JWT tokens. We'll create a simplified version that tests the structure.
@@ -251,6 +304,118 @@ func TestCreateSSHSignedJWT(t *testing.T) {
 		assert.Equal(t, signedJWT.Signature, decodedJWT.Signature)
 		assert.Equal(t, signedJWT.Format, decodedJWT.Format)
 	})
+}
+
+func TestTryKeyAuthentication(t *testing.T) {
+	tests := []struct {
+		name          string
+		keyComment    string
+		expectedError bool
+	}{
+		{
+			name:          "successful authentication",
+			keyComment:    "test-key@example.com",
+			expectedError: false,
+		},
+		{
+			name:          "key with no comment",
+			keyComment:    "",
+			expectedError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create test SSH key
+			testKey, err := testdata.CreateTestAgentKey()
+			require.NoError(t, err)
+			testKey.Comment = tt.keyComment
+
+			// Create test config
+			config := &Config{
+				DexURL:   "https://test-dex.example.com",
+				ClientID: "test-client",
+				Audience: "test-audience",
+			}
+
+			// Create mock SSH client
+			mockAgent := &mocks.MockExtendedAgent{}
+			sshClient := &SSHAgentClient{agent: mockAgent}
+
+			// Set up mock to return test signature
+			mockAgent.On("Sign", testKey, mock.AnythingOfType("[]uint8")).
+				Return(testdata.TestSSHSignature(), nil)
+
+			// Test key authentication
+			signedJWT, err := tryKeyAuthentication(testKey, config, sshClient)
+
+			if tt.expectedError {
+				require.Error(t, err)
+				assert.Empty(t, signedJWT)
+			} else {
+				require.NoError(t, err)
+				assert.NotEmpty(t, signedJWT)
+
+				// Verify JWT structure
+				decodedBytes, decodeErr := base64.StdEncoding.DecodeString(signedJWT)
+				require.NoError(t, decodeErr)
+
+				var jwt SSHSignedJWT
+				unmarshalErr := json.Unmarshal(decodedBytes, &jwt)
+				require.NoError(t, unmarshalErr)
+				assert.NotEmpty(t, jwt.Token)
+				assert.NotEmpty(t, jwt.Signature)
+				assert.NotEmpty(t, jwt.Format)
+			}
+
+			mockAgent.AssertExpectations(t)
+		})
+	}
+}
+
+func TestMultiKeyAuthError(t *testing.T) {
+	tests := []struct {
+		name      string
+		keyErrors []KeyAttemptError
+		expected  string
+	}{
+		{
+			name:      "no keys attempted",
+			keyErrors: []KeyAttemptError{},
+			expected:  "authentication failed: no SSH keys attempted",
+		},
+		{
+			name: "single key failure",
+			keyErrors: []KeyAttemptError{
+				{Index: 0, Fingerprint: "SHA256:AAAA...", Comment: "test-key", Error: errors.New("not authorized")},
+			},
+			expected: "authentication failed with SSH key SHA256:AAAA...: not authorized",
+		},
+		{
+			name: "multiple key failures",
+			keyErrors: []KeyAttemptError{
+				{Index: 0, Fingerprint: "SHA256:AAAA...", Comment: "first-key", Error: errors.New("not authorized")},
+				{Index: 1, Fingerprint: "SHA256:BBBB...", Comment: "", Error: errors.New("invalid key")},
+				{Index: 2, Fingerprint: "SHA256:CCCC...", Comment: "third-key", Error: errors.New("signing failed")},
+			},
+			expected: "authentication failed with all 3 SSH keys:\n" +
+				"  key 1: SHA256:AAAA... first-key - not authorized\n" +
+				"  key 2: SHA256:BBBB... (no comment) - invalid key\n" +
+				"  key 3: SHA256:CCCC... third-key - signing failed\n" +
+				"\n" +
+				"Possible solutions:\n" +
+				"  1. Ensure one of these keys is authorized in Dex configuration\n" +
+				"  2. Load an authorized key: ssh-add ~/.ssh/authorized_key\n" +
+				"  3. Check Dex logs for authorization details",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := NewMultiKeyAuthError(tt.keyErrors)
+			assert.Equal(t, tt.expected, err.Error())
+		})
+	}
 }
 
 func TestExchangeWithDex(t *testing.T) {
@@ -385,6 +550,99 @@ func TestOutputExecCredential(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCreateSSHSignedJWT_MultipleKeys(t *testing.T) {
+	t.Run("tests key iteration logic directly", func(t *testing.T) {
+		// Test the logic we implemented by testing individual key authentication
+		config := &Config{
+			DexURL:   "https://test-dex.example.com",
+			ClientID: "test-client",
+			Audience: "kubernetes",
+		}
+
+		// Test successful key authentication
+		t.Run("successful key authentication", func(t *testing.T) {
+			mockClient := &mocks.MockSSHAgentClient{}
+			testKey := testdata.TestKey1()
+
+			signature := &ssh.Signature{
+				Format: "rsa-sha2-256",
+				Blob:   []byte("mock-signature"),
+			}
+			pubKey, _ := testdata.TestPublicKey1()
+			mockClient.On("SignWithKey", testKey, mock.AnythingOfType("[]uint8")).Return(signature, pubKey, nil).Once()
+
+			result, err := tryKeyAuthentication(testKey, config, mockClient)
+			require.NoError(t, err)
+			assert.NotEmpty(t, result)
+
+			// Verify JWT structure
+			decoded, err := base64.StdEncoding.DecodeString(result)
+			require.NoError(t, err)
+
+			var signedJWT SSHSignedJWT
+			err = json.Unmarshal(decoded, &signedJWT)
+			require.NoError(t, err)
+
+			assert.NotEmpty(t, signedJWT.Token)
+			assert.NotEmpty(t, signedJWT.Signature)
+			assert.Equal(t, "rsa-sha2-256", signedJWT.Format)
+
+			mockClient.AssertExpectations(t)
+		})
+
+		// Test failed key authentication
+		t.Run("failed key authentication", func(t *testing.T) {
+			mockClient := &mocks.MockSSHAgentClient{}
+			testKey := testdata.TestKey1()
+
+			mockClient.On("SignWithKey", testKey, mock.AnythingOfType("[]uint8")).Return(nil, nil, errors.New("signing failed")).Once()
+
+			result, err := tryKeyAuthentication(testKey, config, mockClient)
+			require.Error(t, err)
+			assert.Empty(t, result)
+			assert.Contains(t, err.Error(), "failed to sign with SSH key")
+
+			mockClient.AssertExpectations(t)
+		})
+	})
+}
+
+func TestKeyIterationBehavior(t *testing.T) {
+	t.Run("validates key iteration logic components", func(t *testing.T) {
+		// Test that we can create KeyAttemptError properly
+		testErr := KeyAttemptError{
+			Index:       0,
+			Fingerprint: "SHA256:test-fingerprint",
+			Comment:     "test-key",
+			Error:       errors.New("test error"),
+		}
+
+		assert.Equal(t, 0, testErr.Index)
+		assert.Equal(t, "SHA256:test-fingerprint", testErr.Fingerprint)
+		assert.Equal(t, "test-key", testErr.Comment)
+		assert.Equal(t, "test error", testErr.Error.Error())
+
+		// Test MultiKeyAuthError creation
+		keyErrors := []KeyAttemptError{testErr}
+		multiErr := NewMultiKeyAuthError(keyErrors)
+
+		assert.Len(t, multiErr.KeyErrors, 1)
+		assert.Contains(t, multiErr.Error(), "authentication failed with SSH key SHA256:test-fingerprint: test error")
+	})
+
+	t.Run("test SSH key parsing and fingerprinting", func(t *testing.T) {
+		testKey := testdata.TestKey1()
+
+		// This should parse without error since we generate valid keys now
+		pubKey, err := ssh.ParsePublicKey(testKey.Blob)
+		require.NoError(t, err)
+
+		fingerprint := ssh.FingerprintSHA256(pubKey)
+		assert.NotEmpty(t, fingerprint)
+		assert.Contains(t, fingerprint, "SHA256:")
+	})
 }
 
 func TestSSHJWTClaimsValidation(t *testing.T) {

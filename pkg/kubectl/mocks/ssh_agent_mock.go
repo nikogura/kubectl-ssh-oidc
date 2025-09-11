@@ -85,3 +85,49 @@ func (m *MockExtendedAgent) Extension(extensionType string, contents []byte) ([]
 	}
 	return args.Get(0).([]byte), args.Error(1) //nolint:errcheck // mock framework handles error checking
 }
+
+// MockSSHAgentClient mocks the SSHAgentClient struct and implements SSHAgentClientInterface.
+type MockSSHAgentClient struct {
+	mock.Mock
+}
+
+// GetKeys mocks the GetKeys method.
+func (m *MockSSHAgentClient) GetKeys() ([]*agent.Key, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*agent.Key), args.Error(1) //nolint:errcheck // mock framework handles error checking
+}
+
+// SignData mocks the SignData method.
+func (m *MockSSHAgentClient) SignData(data []byte) (*ssh.Signature, ssh.PublicKey, error) {
+	args := m.Called(data)
+	var sig *ssh.Signature
+	var pubKey ssh.PublicKey
+
+	if args.Get(0) != nil {
+		sig = args.Get(0).(*ssh.Signature) //nolint:errcheck // mock framework handles error checking
+	}
+	if args.Get(1) != nil {
+		pubKey = args.Get(1).(ssh.PublicKey) //nolint:errcheck // mock framework handles error checking
+	}
+
+	return sig, pubKey, args.Error(2)
+}
+
+// SignWithKey mocks the SignWithKey method.
+func (m *MockSSHAgentClient) SignWithKey(key *agent.Key, data []byte) (*ssh.Signature, ssh.PublicKey, error) {
+	args := m.Called(key, data)
+	var sig *ssh.Signature
+	var pubKey ssh.PublicKey
+
+	if args.Get(0) != nil {
+		sig = args.Get(0).(*ssh.Signature) //nolint:errcheck // mock framework handles error checking
+	}
+	if args.Get(1) != nil {
+		pubKey = args.Get(1).(ssh.PublicKey) //nolint:errcheck // mock framework handles error checking
+	}
+
+	return sig, pubKey, args.Error(2)
+}

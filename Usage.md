@@ -84,7 +84,39 @@ make ssh-fingerprints
 
 ### 3. Configure Dex
 
-Update your Dex configuration with the SSH connector and authorized keys:
+Update your Dex configuration with the SSH connector and user keys:
+
+#### Option A: Multiple Keys Per User (Recommended)
+
+```yaml
+connectors:
+- type: ssh
+  id: ssh
+  name: SSH Key Authentication
+  config:
+    users:
+      "your-username":
+        keys:
+        - "SHA256:your-work-key-fingerprint"
+        - "SHA256:your-home-key-fingerprint"
+        - "SHA256:your-yubikey-fingerprint"
+        username: "your-username"
+        email: "your-email@example.com"
+        full_name: "Your Full Name"
+        groups:
+        - "developers"
+        - "kubernetes-users"
+    
+    allowed_issuers:
+    - "kubectl-ssh-oidc"
+    
+    default_groups:
+    - "authenticated"
+    
+    token_ttl: 3600
+```
+
+#### Option B: Legacy Format (Single Key Per User)
 
 ```yaml
 connectors:
@@ -100,6 +132,14 @@ connectors:
         groups:
         - "developers"
         - "kubernetes-users"
+    
+    allowed_issuers:
+    - "kubectl-ssh-oidc"
+    
+    default_groups:
+    - "authenticated"
+    
+    token_ttl: 3600
 ```
 
 ### 4. Configure kubectl

@@ -68,3 +68,55 @@ func TestDexTokenResponse() string {
 		"id_token": "test-id-token"
 	}`
 }
+
+// TestKey1 creates a test SSH key 1.
+func TestKey1() *agent.Key {
+	key, err := CreateTestAgentKey()
+	if err != nil {
+		panic(err)
+	}
+	key.Comment = "test-key-1@example.com"
+	return key
+}
+
+// TestKey2 creates a test SSH key 2.
+func TestKey2() *agent.Key {
+	// Generate a completely separate key
+	_, _, publicKeyBytes2, err := GenerateTestSSHKey()
+	if err != nil {
+		panic(err)
+	}
+
+	return &agent.Key{
+		Format:  "ssh-rsa",
+		Blob:    publicKeyBytes2,
+		Comment: "test-key-2@example.com",
+	}
+}
+
+// TestKey3 creates a test SSH key 3.
+func TestKey3() *agent.Key {
+	// Generate a completely separate key
+	_, _, publicKeyBytes3, err := GenerateTestSSHKey()
+	if err != nil {
+		panic(err)
+	}
+
+	return &agent.Key{
+		Format:  "ssh-rsa",
+		Blob:    publicKeyBytes3,
+		Comment: "test-key-3@example.com",
+	}
+}
+
+// TestPublicKey1 creates a test public key 1.
+func TestPublicKey1() (ssh.PublicKey, error) {
+	publicKey, _, _, err := GenerateTestSSHKey()
+	return publicKey, err
+}
+
+// TestPublicKey2 creates a test public key 2.
+func TestPublicKey2() (ssh.PublicKey, error) {
+	publicKey, _, _, err := GenerateTestSSHKey()
+	return publicKey, err
+}

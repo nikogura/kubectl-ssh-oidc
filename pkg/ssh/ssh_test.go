@@ -370,3 +370,279 @@ func TestSSHConnector_HandleTokenRequest_MissingAssertion(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "Missing assertion parameter")
 }
+
+func TestSSHConnector_findUserByKey(t *testing.T) {
+	// Generate test SSH keys
+	testPubKey1, _, _, err := testdata.GenerateTestSSHKey()
+	require.NoError(t, err)
+	fingerprint1 := ssh.FingerprintSHA256(testPubKey1)
+
+	testPubKey2, _, _, err := testdata.GenerateTestSSHKey()
+	require.NoError(t, err)
+	fingerprint2 := ssh.FingerprintSHA256(testPubKey2)
+
+	testPubKey3, _, _, err := testdata.GenerateTestSSHKey()
+	require.NoError(t, err)
+	fingerprint3 := ssh.FingerprintSHA256(testPubKey3)
+
+	// Test the new Users format with multiple keys per user
+	t.Run("multiple keys per user - new format", func(t *testing.T) {
+		config := &Config{
+			Users: map[string]UserConfig{
+				"alice": {
+					Keys: []string{fingerprint1, fingerprint2}, // Alice has two keys
+					UserInfo: UserInfo{
+						Username: "alice",
+						Email:    "alice@example.com",
+						Groups:   []string{"developers", "admins"},
+						FullName: "Alice Smith",
+					},
+				},
+				"bob": {
+					Keys: []string{fingerprint3}, // Bob has one key
+					UserInfo: UserInfo{
+						Username: "bob",
+						Email:    "bob@example.com",
+						Groups:   []string{"developers"},
+						FullName: "Bob Jones",
+					},
+				},
+			},
+			DefaultGroups: []string{"authenticated"},
+		}
+
+		conn, _ := config.Open("test", nil)
+		sshConnector := conn.(*SSHConnector)
+
+		// Test finding Alice by her first key
+		userInfo1, findErr1 := sshConnector.findUserByKey(fingerprint1)
+		require.NoError(t, findErr1)
+		assert.Equal(t, "alice", userInfo1.Username)
+		assert.Equal(t, "alice@example.com", userInfo1.Email)
+		assert.Contains(t, userInfo1.Groups, "developers")
+		assert.Contains(t, userInfo1.Groups, "admins")
+
+		// Test finding Alice by her second key
+		userInfo2, findErr2 := sshConnector.findUserByKey(fingerprint2)
+		require.NoError(t, findErr2)
+		assert.Equal(t, "alice", userInfo2.Username)
+		assert.Equal(t, "alice@example.com", userInfo2.Email)
+
+		// Test finding Bob by his key
+		userInfo3, findErr3 := sshConnector.findUserByKey(fingerprint3)
+		require.NoError(t, findErr3)
+		assert.Equal(t, "bob", userInfo3.Username)
+		assert.Equal(t, "bob@example.com", userInfo3.Email)
+		assert.Contains(t, userInfo3.Groups, "developers")
+		assert.NotContains(t, userInfo3.Groups, "admins")
+	})
+
+	// Test backward compatibility with legacy AuthorizedKeys format
+	t.Run("backward compatibility - legacy format", func(t *testing.T) {
+		config := &Config{
+			AuthorizedKeys: map[string]UserInfo{
+				fingerprint1: {
+					Username: "legacy_user",
+					Email:    "legacy@example.com",
+					Groups:   []string{"legacy_group"},
+					FullName: "Legacy User",
+				},
+			},
+		}
+
+		conn, _ := config.Open("test", nil)
+		sshConnector := conn.(*SSHConnector)
+
+		legacyUserInfo, legacyErr := sshConnector.findUserByKey(fingerprint1)
+		require.NoError(t, legacyErr)
+		assert.Equal(t, "legacy_user", legacyUserInfo.Username)
+		assert.Equal(t, "legacy@example.com", legacyUserInfo.Email)
+		assert.Contains(t, legacyUserInfo.Groups, "legacy_group")
+	})
+
+	// Test mixed configuration (new format takes precedence)
+	t.Run("mixed configuration - new format precedence", func(t *testing.T) {
+		config := &Config{
+			Users: map[string]UserConfig{
+				"new_user": {
+					Keys: []string{fingerprint1},
+					UserInfo: UserInfo{
+						Username: "new_user",
+						Email:    "new@example.com",
+						Groups:   []string{"new_group"},
+						FullName: "New User",
+					},
+				},
+			},
+			AuthorizedKeys: map[string]UserInfo{
+				fingerprint1: {
+					Username: "legacy_user",
+					Email:    "legacy@example.com",
+					Groups:   []string{"legacy_group"},
+					FullName: "Legacy User",
+				},
+			},
+		}
+
+		conn, _ := config.Open("test", nil)
+		sshConnector := conn.(*SSHConnector)
+
+		// New format should take precedence
+		mixedUserInfo, mixedErr := sshConnector.findUserByKey(fingerprint1)
+		require.NoError(t, mixedErr)
+		assert.Equal(t, "new_user", mixedUserInfo.Username)
+		assert.Equal(t, "new@example.com", mixedUserInfo.Email)
+		assert.Contains(t, mixedUserInfo.Groups, "new_group")
+	})
+
+	// Test username auto-fill when not specified in UserInfo
+	t.Run("username auto-fill", func(t *testing.T) {
+		config := &Config{
+			Users: map[string]UserConfig{
+				"auto_user": {
+					Keys: []string{fingerprint1},
+					UserInfo: UserInfo{
+						// Username not specified - should be auto-filled from map key
+						Email:    "auto@example.com",
+						Groups:   []string{"auto_group"},
+						FullName: "Auto User",
+					},
+				},
+			},
+		}
+
+		conn, _ := config.Open("test", nil)
+		sshConnector := conn.(*SSHConnector)
+
+		autoUserInfo, autoErr := sshConnector.findUserByKey(fingerprint1)
+		require.NoError(t, autoErr)
+		assert.Equal(t, "auto_user", autoUserInfo.Username) // Should be auto-filled
+		assert.Equal(t, "auto@example.com", autoUserInfo.Email)
+	})
+
+	// Test key not found
+	t.Run("key not found", func(t *testing.T) {
+		config := &Config{
+			Users: map[string]UserConfig{
+				"test_user": {
+					Keys: []string{fingerprint1},
+					UserInfo: UserInfo{
+						Username: "test_user",
+						Email:    "test@example.com",
+					},
+				},
+			},
+		}
+
+		conn, _ := config.Open("test", nil)
+		sshConnector := conn.(*SSHConnector)
+
+		// Try to find with a different key
+		notFoundUserInfo, notFoundErr := sshConnector.findUserByKey(fingerprint2)
+		require.Error(t, notFoundErr)
+		assert.Contains(t, notFoundErr.Error(), "key "+fingerprint2+" not found in authorized keys")
+		assert.Equal(t, UserInfo{}, notFoundUserInfo)
+	})
+}
+
+func TestSSHConnector_validateSSHJWT_MultipleKeysPerUser(t *testing.T) {
+	// Setup test SSH keys
+	testPubKey1, testSigner1, testPubKeyBytes1, err := testdata.GenerateTestSSHKey()
+	require.NoError(t, err)
+	fingerprint1 := ssh.FingerprintSHA256(testPubKey1)
+
+	testPubKey2, testSigner2, testPubKeyBytes2, err := testdata.GenerateTestSSHKey()
+	require.NoError(t, err)
+	fingerprint2 := ssh.FingerprintSHA256(testPubKey2)
+
+	// Configure connector with user having multiple keys
+	config := &Config{
+		Users: map[string]UserConfig{
+			"alice": {
+				Keys: []string{fingerprint1, fingerprint2}, // Alice has two keys
+				UserInfo: UserInfo{
+					Username: "alice",
+					Email:    "alice@example.com",
+					Groups:   []string{"developers", "admins"},
+					FullName: "Alice Smith",
+				},
+			},
+		},
+		AllowedIssuers: []string{"test-issuer"},
+		DefaultGroups:  []string{"authenticated"},
+	}
+
+	conn, _ := config.Open("test", nil)
+	sshConnector := conn.(*SSHConnector)
+
+	// Test authentication with Alice's first key
+	t.Run("authenticate with first key", func(t *testing.T) {
+		sshJWTString := createValidSSHJWT(t, testSigner1, testPubKeyBytes1, fingerprint1, "test-issuer")
+
+		result, validateErr := sshConnector.validateSSHJWT(sshJWTString)
+		require.NoError(t, validateErr)
+
+		assert.Equal(t, "alice", result.UserID)
+		assert.Equal(t, "alice", result.Username)
+		assert.Equal(t, "alice@example.com", result.Email)
+		assert.Contains(t, result.Groups, "developers")
+		assert.Contains(t, result.Groups, "admins")
+		assert.Contains(t, result.Groups, "authenticated") // Default group
+	})
+
+	// Test authentication with Alice's second key
+	t.Run("authenticate with second key", func(t *testing.T) {
+		sshJWTString := createValidSSHJWT(t, testSigner2, testPubKeyBytes2, fingerprint2, "test-issuer")
+
+		result, validateErr := sshConnector.validateSSHJWT(sshJWTString)
+		require.NoError(t, validateErr)
+
+		// Should get the same user identity regardless of which key was used
+		assert.Equal(t, "alice", result.UserID)
+		assert.Equal(t, "alice", result.Username)
+		assert.Equal(t, "alice@example.com", result.Email)
+		assert.Contains(t, result.Groups, "developers")
+		assert.Contains(t, result.Groups, "admins")
+		assert.Contains(t, result.Groups, "authenticated") // Default group
+	})
+}
+
+// Helper function to create a valid SSH JWT for testing.
+func createValidSSHJWT(t *testing.T, signer ssh.Signer, pubKeyBytes []byte, fingerprint, issuer string) string {
+	now := time.Now()
+	claims := &SSHJWTClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    issuer,
+			Audience:  jwt.ClaimStrings{"test-audience"},
+			Subject:   fingerprint,
+			ExpiresAt: jwt.NewNumericDate(now.Add(5 * time.Minute)),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+		},
+		KeyFingerprint: fingerprint,
+		KeyComment:     "test-key@example.com",
+		PublicKey:      base64.StdEncoding.EncodeToString(pubKeyBytes),
+	}
+
+	// Create unsigned token
+	token := jwt.NewWithClaims(jwt.SigningMethodNone, claims)
+	tokenString, err := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
+	require.NoError(t, err)
+
+	// Sign the token with SSH key
+	signature, err := signer.Sign(nil, []byte(tokenString))
+	require.NoError(t, err)
+
+	// Create SSH signed JWT
+	sshJWT := SSHSignedJWT{
+		Token:     tokenString,
+		Signature: base64.StdEncoding.EncodeToString(signature.Blob),
+		Format:    signature.Format,
+	}
+
+	sshJWTBytes, err := json.Marshal(sshJWT)
+	require.NoError(t, err)
+	sshJWTString := base64.StdEncoding.EncodeToString(sshJWTBytes)
+
+	return sshJWTString
+}

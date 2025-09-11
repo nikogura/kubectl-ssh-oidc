@@ -15,8 +15,12 @@ import (
 
 // Config holds the configuration for the SSH connector.
 type Config struct {
-	// AuthorizedKeys maps SSH key fingerprints to user information
-	AuthorizedKeys map[string]UserInfo `json:"authorized_keys"`
+	// Users maps usernames to their SSH key configuration and user information
+	Users map[string]UserConfig `json:"users"`
+
+	// AuthorizedKeys maps SSH key fingerprints to user information (DEPRECATED: use Users instead)
+	// This field is maintained for backward compatibility
+	AuthorizedKeys map[string]UserInfo `json:"authorized_keys,omitempty"`
 
 	// AllowedIssuers specifies which JWT issuers are accepted
 	AllowedIssuers []string `json:"allowed_issuers"`
@@ -26,6 +30,15 @@ type Config struct {
 
 	// TokenTTL specifies how long tokens are valid (in seconds)
 	TokenTTL int `json:"token_ttl"`
+}
+
+// UserConfig contains a user's SSH keys and identity information.
+type UserConfig struct {
+	// Keys is a list of SSH key fingerprints authorized for this user
+	Keys []string `json:"keys"`
+
+	// UserInfo contains the user's identity information
+	UserInfo `json:",inline"`
 }
 
 // UserInfo contains user identity information.
@@ -128,9 +141,9 @@ func (c *SSHConnector) validateSSHJWT(sshJWTString string) (connector.Identity, 
 	}
 
 	// Look up user info by SSH key fingerprint
-	userInfo, exists := c.config.AuthorizedKeys[claims.KeyFingerprint]
-	if !exists {
-		return connector.Identity{}, fmt.Errorf("SSH key not authorized: %s", claims.KeyFingerprint)
+	userInfo, err := c.findUserByKey(claims.KeyFingerprint)
+	if err != nil {
+		return connector.Identity{}, fmt.Errorf("SSH key not authorized: %s - %w", claims.KeyFingerprint, err)
 	}
 
 	// Build identity
@@ -181,6 +194,33 @@ func (c *SSHConnector) verifySSHSignature(token, signatureB64, format, publicKey
 	}
 
 	return nil
+}
+
+// findUserByKey finds a user by their SSH key fingerprint.
+// Supports both the new Users format and the legacy AuthorizedKeys format.
+func (c *SSHConnector) findUserByKey(keyFingerprint string) (UserInfo, error) {
+	// First, check the new Users format
+	for username, userConfig := range c.config.Users {
+		for _, key := range userConfig.Keys {
+			if key == keyFingerprint {
+				// Return the user info with username filled in if not already set
+				userInfo := userConfig.UserInfo
+				if userInfo.Username == "" {
+					userInfo.Username = username
+				}
+				return userInfo, nil
+			}
+		}
+	}
+
+	// Fall back to legacy AuthorizedKeys format for backward compatibility
+	if c.config.AuthorizedKeys != nil {
+		if userInfo, exists := c.config.AuthorizedKeys[keyFingerprint]; exists {
+			return userInfo, nil
+		}
+	}
+
+	return UserInfo{}, fmt.Errorf("key %s not found in authorized keys", keyFingerprint)
 }
 
 // isAllowedIssuer checks if the JWT issuer is allowed.
