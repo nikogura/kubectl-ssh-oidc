@@ -8,220 +8,265 @@ This document provides detailed technical documentation of the kubectl-ssh-oidc 
 graph TB
     A[kubectl] --> B[kubectl-ssh-oidc plugin]
     B --> C[SSH Agent]
+    B --> F[~/.ssh/id_*]
     B --> D[Dex IDP]
     D --> E[Kubernetes API Server]
     
+    subgraph "SSH Key Sources"
+        C -.->|Load Keys| G[Agent Keys]
+        F -.->|Discover Keys| H[Filesystem Keys]
+        G --> I[Key Iteration]
+        H --> I[Key Iteration]
+    end
+    
     subgraph "Authentication Flow"
-        F[1. Get SSH Keys] --> G[2. Create JWT Claims]
-        G --> H[3. Sign JWT with SSH Key]
-        H --> I[4. Exchange with Dex]
-        I --> J[5. Return OIDC Token]
+        I --> J[Try Each Key]
+        J --> K[Create JWT with sub claim]
+        K --> L[Sign JWT with SSH Key]
+        L --> M[Exchange with Dex]
+        M --> N[Return OIDC Token]
     end
     
     subgraph "User Mapping"
-        K[SSH Key Fingerprint] --> L[Dex Config Lookup]
-        L --> M[User Identity]
+        O[Username in JWT sub] --> P[Direct User Lookup]
+        Q[SSH Key Fingerprint] --> R[Verify Key Authorized]
+        P --> S[User Identity]
+        R --> S[User Identity]
     end
 ```
 
-## 🔐 SSH Agent Signing Flow
+## 🔐 SSH Key Authentication Flow
 
 ### Overview
 
-The plugin creates a JWT token containing SSH key metadata and signs it using the private key from the SSH agent. This proves ownership of the SSH key without exposing the private key.
+The plugin supports both SSH agent and filesystem keys, following standard SSH client behavior. It tries each available key in sequence until authentication succeeds. The JWT contains a username claim (sub) for direct user lookup and includes key fingerprint for authorization verification.
 
 ### Detailed Flow
 
-#### 1. SSH Agent Connection
-**File:** `pkg/kubectl/kubectl.go:60-78`
+#### 1. UnifiedSSHClient Setup
+**File:** `pkg/kubectl/kubectl.go:98-150`
 
 ```go
-func NewSSHAgentClient() (*SSHAgentClient, error) {
-    authSock := os.Getenv("SSH_AUTH_SOCK")
-    if authSock == "" {
-        return nil, errors.New("SSH_AUTH_SOCK not set")
+func NewUnifiedSSHClient(config *Config) (*UnifiedSSHClient, error) {
+    client := &UnifiedSSHClient{
+        config: config,
     }
     
-    conn, err := net.Dial("unix", authSock)  // Line 66: Connect to SSH agent
-    if err != nil {
-        return nil, fmt.Errorf("failed to connect to SSH agent: %w", err)
+    // Initialize SSH agent if requested
+    if config.UseAgent {
+        if authSock := os.Getenv("SSH_AUTH_SOCK"); authSock != "" {
+            conn, err := net.Dial("unix", authSock)
+            if err == nil {
+                client.agent = agent.NewClient(conn)
+            }
+        }
     }
     
-    return &SSHAgentClient{
-        agent: agent.NewClient(conn),  // Line 72: Create SSH agent client
-    }, nil
+    return client, nil
 }
 ```
 
 **Key Points:**
-- Connects to SSH agent via Unix socket (`SSH_AUTH_SOCK`)
-- Uses Go's `golang.org/x/crypto/ssh/agent` package
-- Creates an `ExtendedAgent` interface for SSH operations
+- Unified client supporting both SSH agent and filesystem keys
+- Configurable via `SSH_USE_AGENT` environment variable (default: true)
+- Gracefully handles missing SSH agent
+- Supports custom key paths via `SSH_KEY_PATHS`
 
-#### 2. SSH Key Retrieval
-**File:** `pkg/kubectl/kubectl.go:53-78`
+#### 2. SSH Key Discovery and Iteration
+**File:** `pkg/kubectl/kubectl.go:203-245` and `296-365`
 
 ```go
-func (c *SSHAgentClient) GetKeys() (keys []*agent.Key, err error) {
-    keys, err = c.agent.List()  // Retrieve all keys from agent
+func (c *UnifiedSSHClient) GetAllKeys() ([]SSHKey, error) {
+    var allKeys []SSHKey
+    
+    // Get keys from SSH agent if enabled
+    if c.config.UseAgent && c.agent != nil {
+        agentKeys, err := c.agent.List()
+        if err == nil {
+            for _, agentKey := range agentKeys {
+                allKeys = append(allKeys, SSHKey{
+                    Source:     "agent",
+                    AgentKey:   agentKey,
+                })
+            }
+        }
+    }
+    
+    // Get keys from filesystem
+    fsKeys, err := c.getFilesystemKeys()
+    if err == nil {
+        allKeys = append(allKeys, fsKeys...)
+    }
+    
+    return allKeys, nil
+}
+
+// Multi-key authentication with iteration
+func CreateSSHSignedJWT(config *Config) (string, error) {
+    client, err := NewUnifiedSSHClient(config)
     if err != nil {
-        return nil, fmt.Errorf("failed to list SSH keys: %w", err)
+        return "", fmt.Errorf("failed to create SSH client: %w", err)
     }
     
-    if len(keys) == 0 {
-        return nil, errors.New("no SSH keys found in agent")
+    keys, err := client.GetAllKeys()
+    if err != nil {
+        return "", fmt.Errorf("failed to get SSH keys: %w", err)
     }
     
-    return keys, nil
+    // Try each key in sequence (standard SSH behavior)
+    var keyErrors []KeyAuthError
+    for i, sshKey := range keys {
+        signedJWT, err := tryKeyAuthentication(client, sshKey, config, i+1)
+        if err == nil {
+            return signedJWT, nil // Success!
+        }
+        keyErrors = append(keyErrors, KeyAuthError{
+            KeyIndex: i + 1,
+            Source:   sshKey.Source,
+            Error:    err,
+        })
+    }
+    
+    // All keys failed
+    return "", &MultiKeyAuthError{KeyErrors: keyErrors}
 }
 ```
 
 **Key Points:**
-- Retrieves all SSH keys loaded in the agent
-- Returns `[]*agent.Key` containing key metadata and public key blobs
-- Plugin uses the first key (`keys[0]`) for signing
+- Discovers keys from both SSH agent and filesystem following SSH client defaults
+- Standard SSH location discovery: `id_rsa`, `id_ed25519`, `id_ecdsa`, etc.
+- Tries each key in sequence until one succeeds (standard SSH behavior)
+- Supports encrypted filesystem keys with passphrase prompting (3 attempts)
+- Comprehensive error reporting showing all key attempts
 
-#### 3. JWT Claims Creation
-**File:** `pkg/kubectl/kubectl.go:119-143`
+#### 3. JWT Claims Creation (jwt-ssh-agent Pattern)
+**File:** `pkg/kubectl/kubectl.go:460-510`
 
 ```go
-// Use the first available key
-sshKey := keys[0]
-pubKey, err := ssh.ParsePublicKey(sshKey.Blob)
+// JWT with standard claims following jwt-ssh-agent pattern
+claims := jwt.MapClaims{
+    "sub": config.Username,                // Username for user lookup (O(1) performance)
+    "aud": config.Audience,               // Audience claim (e.g., "kubernetes")
+    "iss": "kubectl-ssh-oidc",           // Issuer
+    "jti": generateJTI(),                 // JWT ID for uniqueness
+    "exp": time.Now().Add(5*time.Minute).Unix(), // Short expiration
+    "iat": time.Now().Unix(),            // Issued at
+    "nbf": time.Now().Unix(),            // Not before
+    "key_fingerprint": fingerprint,      // SSH key fingerprint for authorization check
+    "public_key": base64.StdEncoding.EncodeToString(pubKeyBlob), // Public key for verification
+}
+
+// Create JWT token
+token := jwt.NewWithClaims(&SSHSigningMethod{}, claims)
+```
+
+**Key Points:**
+- Uses standard JWT claims: `sub`, `aud`, `jti`, `exp` (following jwt-ssh-agent pattern)
+- `sub` claim contains username for direct O(1) user lookup
+- `key_fingerprint` used to verify the key is authorized for this user
+- `public_key` embedded for signature verification
+- Short 5-minute expiration for security
+
+#### 4. JWT Token Creation and Signing
+**File:** `pkg/kubectl/kubectl.go:510-540`
+
+```go
+// Create JWT with custom SSH signing method
+token := jwt.NewWithClaims(&SSHSigningMethod{}, claims)
+
+// Sign directly with SSH key (agent or filesystem)
+signedString, err := token.SignedString(sshKey)
 if err != nil {
-    return "", fmt.Errorf("failed to parse public key: %w", err)
-}
-
-// Generate key fingerprint
-fingerprint := ssh.FingerprintSHA256(pubKey)  // Line 127: Create SHA256 fingerprint
-
-// Create JWT claims
-claims := &SSHJWTClaims{
-    RegisteredClaims: jwt.RegisteredClaims{
-        Issuer:    "kubectl-ssh-oidc",
-        Audience:  jwt.ClaimStrings{config.Audience},
-        Subject:   fingerprint,                    // Line 135: Fingerprint as subject
-        ExpiresAt: jwt.NewNumericDate(now.Add(5 * time.Minute)),
-        IssuedAt:  jwt.NewNumericDate(now),
-        NotBefore: jwt.NewNumericDate(now),
-    },
-    KeyFingerprint: fingerprint,                   // Line 140: Fingerprint for lookup
-    KeyComment:     sshKey.Comment,               // Line 141: SSH key comment
-    PublicKey:      base64.StdEncoding.EncodeToString(sshKey.Blob), // Line 142: Public key
+    return "", fmt.Errorf("failed to sign token: %w", err)
 }
 ```
 
 **Key Points:**
-- Parses public key from agent's key blob
-- Generates SHA256 fingerprint using `ssh.FingerprintSHA256()`
-- Embeds fingerprint, comment, and public key in JWT claims
-- Sets 5-minute expiration for security
+- Uses custom `SSHSigningMethod` that implements `jwt.SigningMethod` interface  
+- Signs JWT directly with SSH private key through unified client
+- Supports both SSH agent and filesystem keys seamlessly
+- No separate signature step - JWT library handles signing process
 
-#### 4. JWT Token Creation
-**File:** `pkg/kubectl/kubectl.go:145-150`
+#### 5. SSH Signing Operations (Agent and Filesystem)
+**File:** `pkg/kubectl/kubectl.go:580-650`
 
 ```go
-// Create unsigned token
-token := jwt.NewWithClaims(jwt.SigningMethodNone, claims)
-tokenString, err := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
-if err != nil {
-    return "", fmt.Errorf("failed to create token: %w", err)
+// SSHSigningMethod implements jwt.SigningMethod for direct SSH signing
+func (m *SSHSigningMethod) Sign(signingString string, key interface{}) ([]byte, error) {
+    sshKey, ok := key.(SSHKey)
+    if !ok {
+        return nil, fmt.Errorf("SSH signing requires SSHKey, got %T", key)
+    }
+    
+    data := []byte(signingString)
+    
+    // Sign with agent key
+    if sshKey.Source == "agent" && sshKey.AgentKey != nil {
+        signature, err := m.client.agent.Sign(sshKey.AgentKey, data)
+        if err != nil {
+            return nil, fmt.Errorf("failed to sign with agent key: %w", err)
+        }
+        return m.encodeSignature(signature), nil
+    }
+    
+    // Sign with filesystem key
+    if sshKey.Source == "filesystem" && sshKey.Signer != nil {
+        signature, err := sshKey.Signer.Sign(rand.Reader, data)
+        if err != nil {
+            return nil, fmt.Errorf("failed to sign with filesystem key: %w", err)
+        }
+        return m.encodeSignature(signature), nil
+    }
+    
+    return nil, errors.New("no valid signing method available")
 }
 ```
 
 **Key Points:**
-- Creates unsigned JWT token with `SigningMethodNone`
-- Uses `jwt.UnsafeAllowNoneSignatureType` since SSH signature is separate
-- Token contains all SSH key metadata but no cryptographic signature yet
-
-#### 5. SSH Signing Operation
-**File:** `pkg/kubectl/kubectl.go:80-100` and `152-157`
-
-```go
-// SignData signs data with the first available SSH key
-func (c *SSHAgentClient) SignData(data []byte) (*ssh.Signature, ssh.PublicKey, error) {
-    keys, err := c.GetKeys()
-    if err != nil {
-        return nil, nil, err
-    }
-    
-    // Use the first key for signing
-    key := keys[0]
-    signature, err := c.agent.Sign(key, data)  // Line 89: **CRITICAL SSH AGENT CALL**
-    if err != nil {
-        return nil, nil, fmt.Errorf("failed to sign data: %w", err)
-    }
-    
-    pubKey, err := ssh.ParsePublicKey(key.Blob)
-    if err != nil {
-        return nil, nil, fmt.Errorf("failed to parse public key: %w", err)
-    }
-    
-    return signature, pubKey, nil
-}
-
-// In CreateSSHSignedJWT:
-tokenBytes := []byte(tokenString)
-signature, _, err := sshClient.SignData(tokenBytes)  // Line 154: Sign the JWT
-if err != nil {
-    return "", err
-}
-```
-
-**Key Points:**
-- **Line 89 is the critical SSH agent interaction**: `c.agent.Sign(key, data)`
-- Signs the JWT token bytes with the SSH private key
-- Returns `*ssh.Signature` containing `Blob` and `Format` fields
-- Private key never leaves the SSH agent
-
-#### 6. Final JWT Assembly
-**File:** `pkg/kubectl/kubectl.go:159-172`
-
-```go
-// Create final JWT with SSH signature
-signedToken := &SSHSignedJWT{
-    Token:     tokenString,                                      // Line 161: Unsigned JWT
-    Signature: base64.StdEncoding.EncodeToString(signature.Blob), // Line 162: SSH signature
-    Format:    signature.Format,                                 // Line 163: Signature format
-}
-
-signedTokenBytes, err := json.Marshal(signedToken)
-if err != nil {
-    return "", fmt.Errorf("failed to marshal signed token: %w", err)
-}
-
-signedJWT = base64.StdEncoding.EncodeToString(signedTokenBytes)  // Line 171: Base64 encode
-return signedJWT, nil
-```
-
-**Key Points:**
-- Combines unsigned JWT with SSH signature
-- Base64 encodes signature blob for JSON transport
-- Preserves signature format (e.g., "rsa-sha2-256", "ecdsa-sha2-nistp256")
-- Final result is base64-encoded JSON structure
+- Unified signing supporting both SSH agent and filesystem keys
+- **SSH Agent**: Uses `agent.Sign(key, data)` - private key stays in agent  
+- **Filesystem**: Uses `crypto.Signer.Sign()` - handles encrypted keys with passphrase prompting
+- Consistent signature encoding regardless of key source
+- Private keys never exposed - all signing operations are abstracted
 
 ### Data Structures
 
-#### SSHJWTClaims
-**File:** `pkg/kubectl/kubectl.go:31-37`
+#### UnifiedSSHClient
+**File:** `pkg/kubectl/kubectl.go:67-75`
 
 ```go
-type SSHJWTClaims struct {
-    jwt.RegisteredClaims
-    KeyFingerprint string `json:"key_fingerprint"` // SHA256:xxx format
-    KeyComment     string `json:"key_comment,omitempty"`
-    PublicKey      string `json:"public_key"`      // Base64-encoded key blob
+type UnifiedSSHClient struct {
+    agent  agent.ExtendedAgent // SSH agent connection (optional)
+    config *Config             // Configuration (SSH_USE_AGENT, paths, etc.)
 }
 ```
 
-#### SSHSignedJWT
-**File:** `pkg/kubectl/kubectl.go:175-180`
+#### SSHKey
+**File:** `pkg/kubectl/kubectl.go:85-95`
 
 ```go
-type SSHSignedJWT struct {
-    Token     string `json:"token"`     // Unsigned JWT token
-    Signature string `json:"signature"` // Base64-encoded signature blob
-    Format    string `json:"format"`    // SSH signature format
+type SSHKey struct {
+    Source      string          // "agent" or "filesystem"
+    AgentKey    *agent.Key      // For agent keys
+    Signer      crypto.Signer   // For filesystem keys  
+    PublicKey   ssh.PublicKey   // Parsed public key
+    Fingerprint string          // SHA256 fingerprint
+    Comment     string          // Key comment/label
+}
+```
+
+#### Config
+**File:** `pkg/kubectl/kubectl.go:31-40`
+
+```go
+type Config struct {
+    DexURL       string   `json:"dex_url"`
+    ClientID     string   `json:"client_id"`
+    Audience     string   `json:"audience"`
+    Username     string   `json:"username"`        // For JWT sub claim
+    UseAgent     bool     `json:"use_agent"`       // Default: true
+    SSHKeyPaths  []string `json:"ssh_key_paths,omitempty"` // Custom key locations
+    IdentitiesOnly bool   `json:"identities_only,omitempty"` // Use only specified keys
 }
 ```
 
@@ -229,140 +274,194 @@ type SSHSignedJWT struct {
 
 ### Overview
 
-The Dex SSH connector maps SSH key fingerprints to user identities through pre-configured authorization mappings. This allows centralized user management while leveraging existing SSH key infrastructure.
+The Dex SSH connector uses JWT-based authentication with direct username lookup (O(1) performance) and SSH key authorization verification. The username comes from the JWT `sub` claim, eliminating the need to search through all users.
 
 ### Detailed Flow
 
-#### 1. JWT Reception and Parsing
-**File:** `pkg/ssh/ssh.go:85-98`
+#### 1. JWT Reception and Parsing (jwt-ssh-agent approach)
+**File:** `pkg/ssh/ssh.go:93-130`
 
 ```go
 func (c *SSHConnector) validateSSHJWT(sshJWTString string) (connector.Identity, error) {
-    // Decode the base64-encoded SSH JWT
-    sshJWTBytes, err := base64.StdEncoding.DecodeString(sshJWTString)
-    if err != nil {
-        return connector.Identity{}, fmt.Errorf("failed to decode SSH JWT: %w", err)
-    }
-    
-    // Parse the SSH-signed JWT structure
-    var sshJWT SSHSignedJWT
-    parseErr := json.Unmarshal(sshJWTBytes, &sshJWT)
-    if parseErr != nil {
-        return connector.Identity{}, fmt.Errorf("failed to parse SSH JWT: %w", parseErr)
-    }
+    // Register SSH signing method for JWT parsing
+    jwt.RegisterSigningMethod("SSH", func() jwt.SigningMethod {
+        return &SSHSigningMethodServer{}
+    })
+
+    // Parse JWT directly using jwt-ssh-agent approach
+    token, err := jwt.Parse(sshJWTString, func(token *jwt.Token) (interface{}, error) {
+        // Verify signing algorithm is SSH
+        if token.Method.Alg() != "SSH" {
+            return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+        }
+
+        // Extract public key from claims for verification
+        claims, ok := token.Claims.(jwt.MapClaims)
+        if !ok {
+            return nil, errors.New("invalid claims format")
+        }
+
+        publicKeyB64, ok := claims["public_key"].(string)
+        if !ok {
+            return nil, errors.New("missing public_key claim")
+        }
+
+        // Parse SSH public key for verification
+        publicKeyBytes, err := base64.StdEncoding.DecodeString(publicKeyB64)
+        if err != nil {
+            return nil, fmt.Errorf("failed to decode public key: %w", err)
+        }
+
+        publicKey, err := ssh.ParsePublicKey(publicKeyBytes)
+        if err != nil {
+            return nil, fmt.Errorf("failed to parse public key: %w", err)
+        }
+
+        return publicKey, nil
+    })
 ```
 
-#### 2. JWT Claims Extraction
-**File:** `pkg/ssh/ssh.go:100-112`
+#### 2. JWT Claims Validation (Standards Compliant)
+**File:** `pkg/ssh/ssh.go:130-180`
 
 ```go
-// Parse the JWT token (without verification first)
-token, err := jwt.ParseWithClaims(sshJWT.Token, &SSHJWTClaims{}, func(token *jwt.Token) (interface{}, error) {
-    // We'll verify the signature separately using SSH key
-    return jwt.UnsafeAllowNoneSignatureType, nil
-})
-if err != nil {
-    return connector.Identity{}, fmt.Errorf("failed to parse JWT: %w", err)
-}
-
-claims, ok := token.Claims.(*SSHJWTClaims)
+// Extract and validate standard JWT claims
+claims, ok := token.Claims.(jwt.MapClaims)
 if !ok {
-    return connector.Identity{}, errors.New("invalid JWT claims")
+    return connector.Identity{}, errors.New("invalid JWT claims format")
+}
+
+// Validate required standard claims
+sub, ok := claims["sub"].(string)
+if !ok || sub == "" {
+    return connector.Identity{}, errors.New("missing or invalid sub claim")
+}
+
+aud, ok := claims["aud"].(string) 
+if !ok || aud == "" {
+    return connector.Identity{}, errors.New("missing or invalid aud claim")
+}
+
+// Validate audience - ensure token is intended for this Dex instance
+if aud != "kubernetes" {
+    return connector.Identity{}, fmt.Errorf("invalid audience: %s", aud)
+}
+
+// Validate issuer
+iss, ok := claims["iss"].(string)
+if !ok || iss == "" {
+    return connector.Identity{}, errors.New("missing or invalid iss claim")
+}
+
+if !c.isAllowedIssuer(iss) {
+    return connector.Identity{}, fmt.Errorf("invalid issuer: %s", iss)
+}
+
+// Validate expiration (critical security check)
+exp, ok := claims["exp"].(float64)
+if !ok {
+    return connector.Identity{}, errors.New("missing or invalid exp claim")
+}
+
+if time.Unix(int64(exp), 0).Before(time.Now()) {
+    return connector.Identity{}, errors.New("token has expired")
 }
 ```
 
-#### 3. Signature Verification
-**File:** `pkg/ssh/ssh.go:124-128` and `151-180`
+#### 3. SSH Signature Verification (Built into JWT parsing)
+**File:** `pkg/ssh/ssh.go:385-415`
 
 ```go
-// Verify SSH signature
-verifyErr := c.verifySSHSignature(sshJWT.Token, sshJWT.Signature, sshJWT.Format, claims.PublicKey)
-if verifyErr != nil {
-    return connector.Identity{}, fmt.Errorf("SSH signature verification failed: %w", verifyErr)
-}
+// SSHSigningMethodServer verifies SSH signatures during JWT parsing
+func (m *SSHSigningMethodServer) Verify(signingString string, signature []byte, key interface{}) error {
+    // Parse SSH public key
+    publicKey, ok := key.(ssh.PublicKey)
+    if !ok {
+        return fmt.Errorf("SSH verification requires ssh.PublicKey, got %T", key)
+    }
 
-func (c *SSHConnector) verifySSHSignature(token, signatureB64, format, publicKeyB64 string) error {
-    // Decode public key
-    publicKeyBytes, err := base64.StdEncoding.DecodeString(publicKeyB64)
-    if err != nil {
-        return fmt.Errorf("failed to decode public key: %w", err)
-    }
-    
-    publicKey, err := ssh.ParsePublicKey(publicKeyBytes)
-    if err != nil {
-        return fmt.Errorf("failed to parse public key: %w", err)
-    }
-    
-    // Decode signature
-    signatureBytes, err := base64.StdEncoding.DecodeString(signatureB64)
+    // Decode the base64-encoded signature
+    signatureStr := string(signature)
+    signatureBytes, err := base64.StdEncoding.DecodeString(signatureStr)
     if err != nil {
         return fmt.Errorf("failed to decode signature: %w", err)
     }
-    
-    // Create SSH signature structure
-    signature := &ssh.Signature{
-        Format: format,
+
+    // Construct SSH signature structure
+    sshSignature := &ssh.Signature{
+        Format: publicKey.Type(), // Use key type as format
         Blob:   signatureBytes,
     }
-    
-    // Verify signature
-    data := []byte(token)
-    verifyErr := publicKey.Verify(data, signature)  // Line 178: Cryptographic verification
-    if verifyErr != nil {
-        return fmt.Errorf("signature verification failed: %w", verifyErr)
+
+    // Verify the signature cryptographically
+    err = publicKey.Verify([]byte(signingString), sshSignature)
+    if err != nil {
+        return fmt.Errorf("SSH signature verification failed: %w", err)
     }
-    
+
     return nil
 }
 ```
 
 **Key Points:**
-- Verifies the SSH signature cryptographically
-- Ensures the JWT wasn't tampered with
-- Proves the sender owns the private key corresponding to the public key
+- JWT signature verification integrated into JWT parsing (jwt-ssh-agent pattern)
+- Cryptographic verification using SSH public key from JWT claims
+- Proves ownership of SSH private key without exposing it
+- Ensures JWT integrity and authenticity
 
-#### 4. User Lookup by Fingerprint
-**File:** `pkg/ssh/ssh.go:143-147` and `199-224`
+#### 4. Direct User Lookup with Key Authorization (O(1) Performance)
+**File:** `pkg/ssh/ssh.go:185-202`
 
 ```go
-// Look up user info by SSH key fingerprint (supports multiple keys per user)
-userInfo, err := c.findUserByKey(claims.KeyFingerprint)  // Line 144: **KEY LOOKUP**
-if err != nil {
-    return connector.Identity{}, fmt.Errorf("SSH key not authorized: %s - %w", claims.KeyFingerprint, err)
+// Extract key fingerprint for authorization check
+keyFingerprint, ok := claims["key_fingerprint"].(string)
+if !ok || keyFingerprint == "" {
+    return connector.Identity{}, errors.New("missing or invalid key_fingerprint claim")
 }
 
-// findUserByKey implementation supports both formats
-func (c *SSHConnector) findUserByKey(keyFingerprint string) (UserInfo, error) {
-    // First, check the new Users format (multiple keys per user)
-    for username, userConfig := range c.config.Users {
-        for _, key := range userConfig.Keys {
-            if key == keyFingerprint {
+// Look up user info by username (sub claim) and verify key is authorized
+userInfo, err := c.findUserByUsernameAndKey(sub, keyFingerprint)
+if err != nil {
+    return connector.Identity{}, fmt.Errorf("SSH authentication failed for user %s with key %s: %w", sub, keyFingerprint, err)
+}
+
+// findUserByUsernameAndKey provides O(1) lookup performance
+func (c *SSHConnector) findUserByUsernameAndKey(username, keyFingerprint string) (UserInfo, error) {
+    // Direct O(1) lookup by username
+    if userConfig, exists := c.config.Users[username]; exists {
+        // Check if this key is authorized for this user
+        for _, authorizedKey := range userConfig.Keys {
+            if authorizedKey == keyFingerprint {
                 userInfo := userConfig.UserInfo
                 if userInfo.Username == "" {
-                    userInfo.Username = username  // Auto-fill from map key
+                    userInfo.Username = username
                 }
                 return userInfo, nil
             }
         }
+        return UserInfo{}, fmt.Errorf("key %s not authorized for user %s", keyFingerprint, username)
     }
 
-    // Fall back to legacy AuthorizedKeys format (one key per user)
+    // Fall back to legacy format (O(n) search)
     if c.config.AuthorizedKeys != nil {
         if userInfo, exists := c.config.AuthorizedKeys[keyFingerprint]; exists {
-            return userInfo, nil
+            if userInfo.Username == username {
+                return userInfo, nil
+            }
+            return UserInfo{}, fmt.Errorf("key %s belongs to user %s, not %s", keyFingerprint, userInfo.Username, username)
         }
     }
 
-    return UserInfo{}, fmt.Errorf("key %s not found in authorized keys", keyFingerprint)
+    return UserInfo{}, fmt.Errorf("user %s not found or key %s not authorized", username, keyFingerprint)
 }
 ```
 
 **Key Points:**
-- **NEW:** Supports multiple SSH keys per user via `Users` configuration
-- Uses `claims.KeyFingerprint` (SHA256 format) as lookup key
-- Searches through all users and their associated keys
+- **NEW:** Direct O(1) user lookup using JWT `sub` claim (username)
+- Efficient key authorization verification (no need to search all users)  
+- Supports multiple SSH keys per user via new `Users` configuration format
 - Falls back to legacy `AuthorizedKeys` format for backward compatibility
-- Rejects authentication if fingerprint not found in any format
+- Rejects authentication if user not found or key not authorized
 
 #### 5. Identity Construction
 **File:** `pkg/ssh/ssh.go:136-148`
@@ -557,7 +656,9 @@ connectors:
 - `github.com/dexidp/dex/connector`: Dex connector interface
 
 ### Extension Points
-- **Multiple Key Support**: Currently uses first key only
+- ✅ **Multiple Key Support**: Implemented with standard SSH client iteration behavior
+- ✅ **Filesystem Keys**: Full support with passphrase prompting
 - **Hardware Keys**: Supports PKCS#11, PIV cards via SSH agent
-- **Custom Claims**: Extensible JWT claims structure
+- **Custom Claims**: Extensible JWT claims structure  
 - **Alternative Fingerprints**: Could support MD5 or other formats
+- **Key Caching**: Could cache successful key for session performance

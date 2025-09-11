@@ -7,7 +7,9 @@ toolchain go1.24.7
 require (
 	github.com/dexidp/dex v2.13.0+incompatible
 	github.com/golang-jwt/jwt/v5 v5.3.0
+	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.42.0
+	golang.org/x/term v0.35.0
 	k8s.io/apimachinery v0.34.1
 	k8s.io/client-go v0.34.1
 )
@@ -22,7 +24,6 @@ require (
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/net v0.43.0 // indirect

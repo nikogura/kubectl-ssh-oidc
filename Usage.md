@@ -1,24 +1,26 @@
 # kubectl-ssh-oidc
 
-A kubectl plugin that provides passwordless authentication to Kubernetes clusters using SSH keys via ssh-agent and Dex Identity Provider.
+A kubectl plugin that provides passwordless authentication to Kubernetes clusters using SSH keys from ssh-agent or filesystem and Dex Identity Provider.
 
 ## Overview
 
 This plugin combines:
-- **SSH Key Authentication**: Uses SSH keys already loaded in your ssh-agent
-- **JWT Signing**: Creates JWTs signed with your SSH private key
+- **Flexible SSH Key Authentication**: Uses SSH keys from ssh-agent or filesystem
+- **Standard SSH Behavior**: Follows SSH client key discovery and iteration patterns
+- **JWT Signing**: Creates standards-compliant JWTs signed with your SSH private key
+- **Passphrase Support**: Interactive prompts for encrypted private keys
 - **Dex Integration**: Exchanges SSH-signed JWTs for OIDC tokens
 - **Kubernetes Access**: Seamlessly authenticates with kubectl
 
 ## Architecture
 
 ```
-kubectl → kubectl-ssh-oidc → ssh-agent → Dex IDP → Kubernetes API Server
+kubectl → kubectl-ssh-oidc → [ssh-agent | ~/.ssh/id_*] → Dex IDP → Kubernetes API Server
 ```
 
 ## Prerequisites
 
-1. **SSH Agent**: Running ssh-agent with loaded SSH keys
+1. **SSH Keys**: SSH agent with loaded keys OR filesystem keys in standard locations (flexible)
 2. **Dex**: Configured with the custom SSH connector
 3. **Kubernetes**: Cluster configured to accept OIDC tokens from Dex
 
@@ -28,7 +30,7 @@ kubectl → kubectl-ssh-oidc → ssh-agent → Dex IDP → Kubernetes API Server
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/kubectl-ssh-oidc
+git clone https://github.com/nikogura/kubectl-ssh-oidc
 cd kubectl-ssh-oidc
 
 # Build and install
@@ -44,13 +46,13 @@ Download the latest release for your platform:
 
 ```bash
 # Linux AMD64
-curl -L -o kubectl-ssh_oidc https://github.com/your-org/kubectl-ssh-oidc/releases/latest/download/kubectl-ssh_oidc-linux-amd64
+curl -L -o kubectl-ssh_oidc https://github.com/nikogura/kubectl-ssh-oidc/releases/latest/download/kubectl-ssh_oidc-linux-amd64
 
 # macOS AMD64 (Intel)
-curl -L -o kubectl-ssh_oidc https://github.com/your-org/kubectl-ssh-oidc/releases/latest/download/kubectl-ssh_oidc-darwin-amd64
+curl -L -o kubectl-ssh_oidc https://github.com/nikogura/kubectl-ssh-oidc/releases/latest/download/kubectl-ssh_oidc-darwin-amd64
 
 # macOS ARM64 (Apple Silicon)
-curl -L -o kubectl-ssh_oidc https://github.com/your-org/kubectl-ssh-oidc/releases/latest/download/kubectl-ssh_oidc-darwin-arm64
+curl -L -o kubectl-ssh_oidc https://github.com/nikogura/kubectl-ssh-oidc/releases/latest/download/kubectl-ssh_oidc-darwin-arm64
 
 # Make executable and move to PATH
 chmod +x kubectl-ssh_oidc
@@ -59,10 +61,11 @@ sudo mv kubectl-ssh_oidc /usr/local/bin/
 
 ## Configuration
 
-### 1. SSH Agent Setup
+### 1. SSH Key Setup (Multiple Options)
 
-Ensure ssh-agent is running with your SSH keys:
+The plugin supports flexible SSH key sources and follows standard SSH client behavior:
 
+#### Option A: SSH Agent (Recommended)
 ```bash
 # Start ssh-agent (if not already running)
 eval $(ssh-agent -s)
@@ -74,11 +77,57 @@ ssh-add ~/.ssh/id_rsa
 ssh-add -l
 ```
 
+#### Option B: Filesystem Keys (No Agent Required)
+```bash
+# Plugin automatically discovers keys from standard SSH locations:
+# ~/.ssh/id_rsa, ~/.ssh/id_ed25519, ~/.ssh/id_ecdsa, etc.
+
+# For encrypted keys, you'll be prompted for passphrase (3 attempts):
+# Enter passphrase for /home/user/.ssh/id_rsa: [hidden]
+# Enter passphrase for /home/user/.ssh/id_rsa: [hidden] (Bad passphrase, try again)
+
+# Disable agent to use only filesystem keys:
+export SSH_USE_AGENT=false
+kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
+```
+
+#### Option C: Mixed (Agent + Filesystem)
+```bash
+# Plugin tries agent keys first, then filesystem keys
+# This is the default behavior - no configuration needed
+export SSH_USE_AGENT=true   # Default: true
+kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
+```
+
+#### Option D: Custom Key Locations
+```bash
+# Specify custom SSH key paths (colon-separated)
+export SSH_KEY_PATHS="/path/to/work_key:/path/to/personal_key"
+export SSH_USE_AGENT=false
+
+# Use only specified keys (ignore standard locations and agent)
+export SSH_IDENTITIES_ONLY=true
+kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
+```
+
 ### 2. Get SSH Key Fingerprints
 
 Generate fingerprints for Dex configuration:
 
 ```bash
+# For agent keys
+ssh-add -l
+
+# For filesystem keys
+ssh-keygen -lf ~/.ssh/id_rsa.pub
+ssh-keygen -lf ~/.ssh/id_ed25519.pub
+
+# For all keys in standard locations
+for key in ~/.ssh/id_*.pub; do
+  [ -f "$key" ] && ssh-keygen -lf "$key"
+done
+
+# Or use make target (shows all discoverable keys from both agent and filesystem)
 make ssh-fingerprints
 ```
 
@@ -208,6 +257,7 @@ contexts:
 kubectl config use-context ssh-oidc-context
 
 # Now kubectl commands will authenticate via SSH
+# Plugin will try each SSH key until one succeeds
 kubectl get pods
 kubectl get nodes
 ```
@@ -217,10 +267,17 @@ kubectl get nodes
 Configure the plugin using environment variables:
 
 ```bash
+# Authentication settings
 export DEX_URL="https://dex.example.com"
 export CLIENT_ID="kubectl-ssh-oidc"
 export AUDIENCE="kubernetes"
 export CACHE_TOKENS="true"
+export KUBECTL_SSH_USER="your-username"  # Username for authentication
+
+# SSH behavior control
+export SSH_USE_AGENT="true"              # Use SSH agent (default: true)
+export SSH_IDENTITIES_ONLY="false"       # Only use specified keys (default: false)
+export SSH_KEY_PATHS="/path/to/key1:/path/to/key2"  # Custom SSH key paths
 ```
 
 ### Command Line Arguments
@@ -369,7 +426,7 @@ kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
 
 ### Prerequisites
 
-- Go 1.24+
+- Go 1.21+
 - SSH agent with loaded keys
 - Running Dex instance with SSH connector
 - Kubernetes cluster with OIDC authentication configured

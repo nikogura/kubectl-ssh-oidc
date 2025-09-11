@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/nikogura/kubectl-ssh-oidc)](https://github.com/nikogura/kubectl-ssh-oidc/releases)
 
-A kubectl plugin that provides **passwordless authentication** to Kubernetes clusters using SSH keys via ssh-agent and Dex Identity Provider.
+A kubectl plugin that provides **passwordless authentication** to Kubernetes clusters using SSH keys from ssh-agent or filesystem and Dex Identity Provider.
 
 ## 🚀 Overview
 
@@ -12,9 +12,11 @@ This plugin eliminates the need for passwords, browser-based OAuth flows, or man
 
 ### Key Benefits
 
-- ✅ **Passwordless**: Uses SSH keys already in your ssh-agent
+- ✅ **Passwordless**: Uses SSH keys from ssh-agent or filesystem
 - ✅ **No Browser Required**: Direct CLI authentication
-- ✅ **Existing SSH Infrastructure**: Leverages current SSH key management
+- ✅ **Flexible SSH Keys**: Works with ssh-agent, filesystem keys, or encrypted keys
+- ✅ **Standard SSH Behavior**: Follows SSH client key discovery and iteration
+- ✅ **Passphrase Support**: Interactive prompts for encrypted private keys
 - ✅ **Hardware Security**: Supports hardware-backed SSH keys (PKCS#11, PIV cards)
 - ✅ **Centralized Identity**: Integrates with Dex for user/group management
 - ✅ **Standard OIDC**: Works with any Kubernetes cluster supporting OIDC
@@ -25,10 +27,12 @@ This plugin eliminates the need for passwords, browser-based OAuth flows, or man
 graph LR
     A[kubectl] --> B[kubectl-ssh-oidc plugin]
     B --> C[ssh-agent]
+    B --> F[~/.ssh/id_*]
     B --> D[Dex IDP]
     D --> E[Kubernetes API Server]
     
     C -.->|SSH Key Signature| B
+    F -.->|SSH Key Signature| B
     D -.->|OIDC Token| B
     B -.->|ExecCredential| A
 ```
@@ -36,11 +40,12 @@ graph LR
 **Authentication Flow:**
 1. User runs `kubectl` command
 2. kubectl calls `kubectl-ssh-oidc` plugin  
-3. Plugin creates JWT with SSH key metadata
-4. Plugin signs JWT using SSH private key from agent
-5. Plugin exchanges signed JWT with Dex
-6. Dex validates SSH signature and returns OIDC token
-7. kubectl uses OIDC token to authenticate with Kubernetes API
+3. Plugin discovers SSH keys from ssh-agent and/or filesystem (standard SSH locations)
+4. Plugin creates JWT with SSH key metadata and standard claims (sub, aud, jti, exp)
+5. Plugin signs JWT directly using SSH private key (follows jwt-ssh-agent pattern)
+6. Plugin exchanges signed JWT with Dex
+7. Dex validates SSH signature, expiration, and audience claims then returns OIDC token
+8. kubectl uses OIDC token to authenticate with Kubernetes API
 
 ## 📦 Installation
 
@@ -77,8 +82,11 @@ make install-system
 
 ## ⚙️ Configuration
 
-### 1. SSH Agent Setup
+### 1. SSH Key Setup (Flexible Options)
 
+The plugin supports multiple SSH key sources and follows standard SSH client behavior:
+
+#### Option A: SSH Agent (Recommended)
 ```bash
 # Start ssh-agent (if not running)
 eval $(ssh-agent -s)
@@ -90,14 +98,37 @@ ssh-add ~/.ssh/id_rsa
 ssh-add -l
 ```
 
+#### Option B: Filesystem Keys (No Agent Required)
+```bash
+# Plugin automatically discovers keys from standard locations:
+# ~/.ssh/id_rsa, ~/.ssh/id_ed25519, ~/.ssh/id_ecdsa, etc.
+
+# For encrypted keys, you'll be prompted for passphrase:
+# Enter passphrase for /home/user/.ssh/id_rsa: [hidden]
+
+# Custom key paths via environment variable:
+export SSH_KEY_PATHS="/path/to/key1:/path/to/key2"
+export SSH_USE_AGENT=false  # Disable agent, use only filesystem
+```
+
+#### Option C: Mixed (Agent + Filesystem)
+```bash
+# Plugin tries agent keys first, then filesystem keys
+# This is the default behavior - no configuration needed
+export SSH_USE_AGENT=true   # Default: true
+```
+
 ### 2. Get SSH Key Fingerprints
 
 ```bash
-# Generate fingerprints for Dex configuration
-make ssh-fingerprints
-
-# Or manually get fingerprints
+# For agent keys
 ssh-add -l
+
+# For filesystem keys  
+ssh-keygen -lf ~/.ssh/id_rsa.pub
+
+# Or use make target to show all
+make ssh-fingerprints
 ```
 
 ### 3. Configure Dex
@@ -241,17 +272,31 @@ kubectl logs deployment/my-app
 ### Environment Variables
 
 ```bash
+# Authentication settings
 export DEX_URL="https://dex.example.com"
 export CLIENT_ID="kubectl-ssh-oidc"
 export AUDIENCE="kubernetes"
 export CACHE_TOKENS="true"
+export KUBECTL_SSH_USER="your-username"  # Username for authentication
+
+# SSH behavior control
+export SSH_USE_AGENT="true"              # Use SSH agent (default: true)
+export SSH_IDENTITIES_ONLY="false"       # Only use specified keys (default: false)
+export SSH_KEY_PATHS="/path/to/key1:/path/to/key2"  # Custom SSH key paths
 ```
 
 ### Direct Plugin Usage
 
 ```bash
-# Generate credentials manually
+# Generate credentials manually (uses agent + filesystem keys)
 kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
+
+# Use only filesystem keys (no agent)
+SSH_USE_AGENT=false kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
+
+# Use specific key only
+SSH_KEY_PATHS="/home/user/.ssh/work_key" SSH_IDENTITIES_ONLY=true \
+  kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
 ```
 
 ## 🔐 RBAC Configuration
@@ -343,11 +388,13 @@ make check-ssh
 
 | Issue | Solution |
 |-------|----------|
-| `No SSH keys in agent` | `ssh-add ~/.ssh/id_rsa` |
-| `SSH agent not running` | `eval $(ssh-agent -s)` |
+| `No SSH keys found` | Ensure keys in `~/.ssh/` or add to agent: `ssh-add ~/.ssh/id_rsa` |
+| `SSH agent not running` | `eval $(ssh-agent -s)` or use `SSH_USE_AGENT=false` |
 | `Key not authorized in Dex` | Check fingerprint matches Dex config |
+| `Passphrase prompt fails` | Ensure TTY available or use unencrypted keys |
 | `OIDC validation failed` | Verify kube-apiserver OIDC settings |
 | `Permission denied` | Check RBAC configuration |
+| `Multiple key errors` | Check detailed error output for each key attempt |
 
 ### Debug Mode
 
@@ -388,8 +435,8 @@ This project includes:
 ## 📋 Requirements
 
 - **kubectl**: v1.20+
-- **Go**: 1.24+ (for building from source)
-- **SSH Agent**: OpenSSH ssh-agent or compatible
+- **Go**: 1.21+ (for building from source)
+- **SSH Keys**: SSH agent or filesystem keys (OpenSSH format)
 - **Dex**: v2.35+ with custom SSH connector (see [Usage.md](Usage.md) for setup)
 - **Kubernetes**: v1.20+ with OIDC support configured
 
@@ -419,7 +466,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - 📖 [Usage Documentation](Usage.md)
 - 🏠 [Architecture & Technical Details](ARCHITECTURE.md)
 - ⚠️ [Limitations & Known Issues](LIMITATIONS.md)
-- 🔑 [SSH Key Iteration Pattern](SSH_KEY_ITERATION.md)
 - 🐛 [Issue Tracker](https://github.com/nikogura/kubectl-ssh-oidc/issues)
 - 💬 [Discussions](https://github.com/nikogura/kubectl-ssh-oidc/discussions)
 

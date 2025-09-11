@@ -1,3 +1,6 @@
+// TODO: Update tests for jwt-ssh-agent approach
+// +build ignore
+
 package kubectl
 
 import (

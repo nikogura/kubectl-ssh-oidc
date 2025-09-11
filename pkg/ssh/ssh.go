@@ -54,21 +54,6 @@ type SSHConnector struct {
 	config Config
 }
 
-// SSHSignedJWT represents a JWT signed with SSH key (matches client format).
-type SSHSignedJWT struct {
-	Token     string `json:"token"`
-	Signature string `json:"signature"`
-	Format    string `json:"format"`
-}
-
-// SSHJWTClaims represents JWT claims for SSH authentication.
-type SSHJWTClaims struct {
-	jwt.RegisteredClaims
-	KeyFingerprint string `json:"key_fingerprint"`
-	KeyComment     string `json:"key_comment,omitempty"`
-	PublicKey      string `json:"public_key"`
-}
-
 // Open creates a new SSH connector.
 func (c *Config) Open(id string, logger interface{}) (connector.Connector, error) {
 	return &SSHConnector{
@@ -96,54 +81,110 @@ func (c *SSHConnector) HandleCallback(scopes connector.Scopes, r *http.Request) 
 }
 
 // validateSSHJWT validates an SSH-signed JWT and extracts user identity.
+// Updated for jwt-ssh-agent approach: direct JWT parsing with proper validation.
+//
+//nolint:gocognit // JWT validation requires comprehensive checks for security
 func (c *SSHConnector) validateSSHJWT(sshJWTString string) (connector.Identity, error) {
-	// Decode the base64-encoded SSH JWT
-	sshJWTBytes, err := base64.StdEncoding.DecodeString(sshJWTString)
-	if err != nil {
-		return connector.Identity{}, fmt.Errorf("failed to decode SSH JWT: %w", err)
-	}
-
-	// Parse the SSH-signed JWT structure
-	var sshJWT SSHSignedJWT
-	parseErr := json.Unmarshal(sshJWTBytes, &sshJWT)
-	if parseErr != nil {
-		return connector.Identity{}, fmt.Errorf("failed to parse SSH JWT: %w", parseErr)
-	}
-
-	// Parse the JWT token (without verification first)
-	token, err := jwt.ParseWithClaims(sshJWT.Token, &SSHJWTClaims{}, func(token *jwt.Token) (interface{}, error) {
-		// We'll verify the signature separately using SSH key
-		return jwt.UnsafeAllowNoneSignatureType, nil
+	// Register our custom SSH signing method for JWT parsing
+	jwt.RegisterSigningMethod("SSH", func() jwt.SigningMethod {
+		return &SSHSigningMethodServer{}
 	})
+
+	// Parse JWT directly (jwt-ssh-agent approach)
+	token, err := jwt.Parse(sshJWTString, func(token *jwt.Token) (interface{}, error) {
+		// Verify the signing algorithm is our SSH method
+		if token.Method.Alg() != "SSH" {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+
+		// Extract public key from claims for verification
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok {
+			return nil, errors.New("invalid claims format")
+		}
+
+		publicKeyB64, ok := claims["public_key"].(string)
+		if !ok {
+			return nil, errors.New("missing public_key claim")
+		}
+
+		// Decode and parse public key
+		publicKeyBytes, err := base64.StdEncoding.DecodeString(publicKeyB64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode public key: %w", err)
+		}
+
+		publicKey, err := ssh.ParsePublicKey(publicKeyBytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse public key: %w", err)
+		}
+
+		return publicKey, nil
+	})
+
 	if err != nil {
 		return connector.Identity{}, fmt.Errorf("failed to parse JWT: %w", err)
 	}
 
-	claims, ok := token.Claims.(*SSHJWTClaims)
+	// Extract claims
+	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		return connector.Identity{}, errors.New("invalid JWT claims")
+		return connector.Identity{}, errors.New("invalid JWT claims format")
+	}
+
+	// Validate required claims
+	sub, ok := claims["sub"].(string)
+	if !ok || sub == "" {
+		return connector.Identity{}, errors.New("missing or invalid sub claim")
+	}
+
+	aud, ok := claims["aud"].(string)
+	if !ok || aud == "" {
+		return connector.Identity{}, errors.New("missing or invalid aud claim")
+	}
+
+	// Validate audience - ensure this token is intended for our Dex instance
+	if aud != "kubernetes" {
+		return connector.Identity{}, fmt.Errorf("invalid audience: %s", aud)
+	}
+
+	iss, ok := claims["iss"].(string)
+	if !ok || iss == "" {
+		return connector.Identity{}, errors.New("missing or invalid iss claim")
 	}
 
 	// Validate issuer
-	if !c.isAllowedIssuer(claims.Issuer) {
-		return connector.Identity{}, fmt.Errorf("invalid issuer: %s", claims.Issuer)
+	if !c.isAllowedIssuer(iss) {
+		return connector.Identity{}, fmt.Errorf("invalid issuer: %s", iss)
 	}
 
-	// Validate expiration
-	if claims.ExpiresAt != nil && claims.ExpiresAt.Before(time.Now()) {
+	// Validate expiration (critical security check)
+	exp, ok := claims["exp"].(float64)
+	if !ok {
+		return connector.Identity{}, errors.New("missing or invalid exp claim")
+	}
+
+	if time.Unix(int64(exp), 0).Before(time.Now()) {
 		return connector.Identity{}, errors.New("token has expired")
 	}
 
-	// Verify SSH signature
-	verifyErr := c.verifySSHSignature(sshJWT.Token, sshJWT.Signature, sshJWT.Format, claims.PublicKey)
-	if verifyErr != nil {
-		return connector.Identity{}, fmt.Errorf("SSH signature verification failed: %w", verifyErr)
+	// Validate not before
+	if nbfClaim, nbfOk := claims["nbf"].(float64); nbfOk {
+		if time.Unix(int64(nbfClaim), 0).After(time.Now()) {
+			return connector.Identity{}, errors.New("token not yet valid")
+		}
 	}
 
-	// Look up user info by SSH key fingerprint
-	userInfo, err := c.findUserByKey(claims.KeyFingerprint)
+	// Extract key fingerprint for user lookup
+	keyFingerprint, ok := claims["key_fingerprint"].(string)
+	if !ok || keyFingerprint == "" {
+		return connector.Identity{}, errors.New("missing or invalid key_fingerprint claim")
+	}
+
+	// Look up user info by username (sub claim) and verify key is authorized
+	userInfo, err := c.findUserByUsernameAndKey(sub, keyFingerprint)
 	if err != nil {
-		return connector.Identity{}, fmt.Errorf("SSH key not authorized: %s - %w", claims.KeyFingerprint, err)
+		return connector.Identity{}, fmt.Errorf("SSH authentication failed for user %s with key %s: %w", sub, keyFingerprint, err)
 	}
 
 	// Build identity
@@ -196,13 +237,14 @@ func (c *SSHConnector) verifySSHSignature(token, signatureB64, format, publicKey
 	return nil
 }
 
-// findUserByKey finds a user by their SSH key fingerprint.
-// Supports both the new Users format and the legacy AuthorizedKeys format.
-func (c *SSHConnector) findUserByKey(keyFingerprint string) (UserInfo, error) {
-	// First, check the new Users format
-	for username, userConfig := range c.config.Users {
-		for _, key := range userConfig.Keys {
-			if key == keyFingerprint {
+// findUserByUsernameAndKey finds a user by username and verifies the key is authorized.
+// This provides O(1) lookup performance instead of searching all users.
+func (c *SSHConnector) findUserByUsernameAndKey(username, keyFingerprint string) (UserInfo, error) {
+	// First, check the new Users format (O(1) lookup)
+	if userConfig, exists := c.config.Users[username]; exists {
+		// Check if this key is authorized for this user
+		for _, authorizedKey := range userConfig.Keys {
+			if authorizedKey == keyFingerprint {
 				// Return the user info with username filled in if not already set
 				userInfo := userConfig.UserInfo
 				if userInfo.Username == "" {
@@ -211,16 +253,21 @@ func (c *SSHConnector) findUserByKey(keyFingerprint string) (UserInfo, error) {
 				return userInfo, nil
 			}
 		}
+		return UserInfo{}, fmt.Errorf("key %s not authorized for user %s", keyFingerprint, username)
 	}
 
 	// Fall back to legacy AuthorizedKeys format for backward compatibility
 	if c.config.AuthorizedKeys != nil {
 		if userInfo, exists := c.config.AuthorizedKeys[keyFingerprint]; exists {
-			return userInfo, nil
+			// Verify the username matches
+			if userInfo.Username == username {
+				return userInfo, nil
+			}
+			return UserInfo{}, fmt.Errorf("key %s belongs to user %s, not %s", keyFingerprint, userInfo.Username, username)
 		}
 	}
 
-	return UserInfo{}, fmt.Errorf("key %s not found in authorized keys", keyFingerprint)
+	return UserInfo{}, fmt.Errorf("user %s not found or key %s not authorized", username, keyFingerprint)
 }
 
 // isAllowedIssuer checks if the JWT issuer is allowed.
@@ -320,4 +367,48 @@ func (c *SSHConnector) generateAccessToken(identity connector.Identity) (string,
 	}
 
 	return tokenString, nil
+}
+
+// SSHSigningMethodServer implements JWT signing method for server-side SSH verification.
+type SSHSigningMethodServer struct{}
+
+// Alg returns the signing method algorithm identifier.
+func (m *SSHSigningMethodServer) Alg() string {
+	return "SSH"
+}
+
+// Sign is not implemented on server side (client-only operation).
+func (m *SSHSigningMethodServer) Sign(signingString string, key interface{}) ([]byte, error) {
+	return nil, errors.New("SSH signing not supported on server side")
+}
+
+// Verify verifies the JWT signature using the SSH public key.
+func (m *SSHSigningMethodServer) Verify(signingString string, signature []byte, key interface{}) error {
+	// Parse SSH public key
+	publicKey, ok := key.(ssh.PublicKey)
+	if !ok {
+		return fmt.Errorf("SSH verification requires ssh.PublicKey, got %T", key)
+	}
+
+	// Decode the base64-encoded signature
+	signatureStr := string(signature)
+	signatureBytes, err := base64.StdEncoding.DecodeString(signatureStr)
+	if err != nil {
+		return fmt.Errorf("failed to decode signature: %w", err)
+	}
+
+	// For SSH signature verification, we need to construct the signature structure
+	// The signature format follows SSH wire protocol
+	sshSignature := &ssh.Signature{
+		Format: publicKey.Type(), // Use key type as format
+		Blob:   signatureBytes,
+	}
+
+	// Verify the signature
+	err = publicKey.Verify([]byte(signingString), sshSignature)
+	if err != nil {
+		return fmt.Errorf("SSH signature verification failed: %w", err)
+	}
+
+	return nil
 }
