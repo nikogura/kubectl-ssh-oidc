@@ -54,6 +54,11 @@ jobs:
     - name: Run unit tests first
       run: make test
 
+    - name: Set up golangci-lint
+      uses: golangci/golangci-lint-action@v6
+      with:
+        version: v1.62.0
+
     - name: Run linting
       run: make lint
 
