@@ -14,9 +14,9 @@ This document outlines current limitations, known issues, and potential improvem
 ```bash
 # Works automatically now - no workarounds needed
 $ ssh-add -l
-2048 SHA256:AAAA... laptop-key (RSA)    # Tries first - not authorized
-4096 SHA256:BBBB... work-key (RSA)      # Tries second - succeeds ✅
-256 SHA256:CCCC... yubikey (ED25519)    # Not needed
+256 SHA256:AAAA... laptop-key (ED25519)  # Tries first - not authorized
+4096 SHA256:BBBB... work-key (RSA)       # Tries second - succeeds ✅
+256 SHA256:CCCC... yubikey (ED25519)     # Not needed
 
 $ kubectl-ssh_oidc https://dex.example.com
 # ✅ Authentication succeeds with any authorized key
@@ -45,13 +45,13 @@ users:
 
 **Filesystem Keys:** Automatically discovers and loads keys from standard SSH locations
 **Encrypted Keys:** Prompts for passphrases using standard SSH behavior (3 attempts)
-**Key Discovery:** Follows SSH client defaults (~/.ssh/id_rsa, id_ed25519, etc.)
+**Key Discovery:** Follows SSH client defaults (~/.ssh/id_ed25519, id_rsa, etc.)
 
 ```bash
 # Works with filesystem keys (no agent required)
 $ export SSH_USE_AGENT=false
 $ kubectl-ssh_oidc https://dex.example.com
-Enter passphrase for /home/user/.ssh/id_rsa: [hidden]
+Enter passphrase for /home/user/.ssh/id_ed25519: [hidden]
 # ✅ Authentication succeeds with filesystem key
 
 # Custom key locations
@@ -91,7 +91,7 @@ export SSH_IDENTITIES_ONLY=false   # Only use specified keys (default: false)
 export SSH_KEY_PATHS="/path/to/key1:/path/to/key2"  # Custom key paths
 
 # Authentication settings
-export KUBECTL_SSH_USER=alice       # Username for authentication
+export KUBECTL_SSH_USER=alice       # Username for JWT sub claim (must match Dex config)
 export DEX_URL=https://dex.example.com
 export CLIENT_ID=kubectl-ssh-oidc
 ```
@@ -104,7 +104,7 @@ export SSH_USE_AGENT=false
 kubectl-ssh_oidc https://dex.example.com
 
 # Use specific key file
-export SSH_KEY_PATHS="/home/user/.ssh/work_key"
+export SSH_KEY_PATHS="/home/user/.ssh/id_ed25519"
 export SSH_IDENTITIES_ONLY=true
 kubectl-ssh_oidc https://dex.example.com
 ```
@@ -120,7 +120,7 @@ ssh-add -l  # Agent keys
 ls ~/.ssh/id_*  # Filesystem keys
 
 # Verify key fingerprints match Dex configuration
-ssh-keygen -lf ~/.ssh/id_rsa.pub
+ssh-keygen -lf ~/.ssh/id_ed25519.pub
 ```
 
 ## 📈 Project Status

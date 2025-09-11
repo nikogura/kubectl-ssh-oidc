@@ -71,7 +71,7 @@ The plugin supports flexible SSH key sources and follows standard SSH client beh
 eval $(ssh-agent -s)
 
 # Add your SSH key
-ssh-add ~/.ssh/id_rsa
+ssh-add ~/.ssh/id_ed25519
 
 # Verify keys are loaded
 ssh-add -l
@@ -80,11 +80,11 @@ ssh-add -l
 #### Option B: Filesystem Keys (No Agent Required)
 ```bash
 # Plugin automatically discovers keys from standard SSH locations:
-# ~/.ssh/id_rsa, ~/.ssh/id_ed25519, ~/.ssh/id_ecdsa, etc.
+# ~/.ssh/id_ed25519, ~/.ssh/id_rsa, ~/.ssh/id_ecdsa, etc.
 
 # For encrypted keys, you'll be prompted for passphrase (3 attempts):
-# Enter passphrase for /home/user/.ssh/id_rsa: [hidden]
-# Enter passphrase for /home/user/.ssh/id_rsa: [hidden] (Bad passphrase, try again)
+# Enter passphrase for /home/user/.ssh/id_ed25519: [hidden]
+# Enter passphrase for /home/user/.ssh/id_ed25519: [hidden] (Bad passphrase, try again)
 
 # Disable agent to use only filesystem keys:
 export SSH_USE_AGENT=false
@@ -119,8 +119,8 @@ Generate fingerprints for Dex configuration:
 ssh-add -l
 
 # For filesystem keys
-ssh-keygen -lf ~/.ssh/id_rsa.pub
 ssh-keygen -lf ~/.ssh/id_ed25519.pub
+ssh-keygen -lf ~/.ssh/id_rsa.pub
 
 # For all keys in standard locations
 for key in ~/.ssh/id_*.pub; do
@@ -212,6 +212,7 @@ users:
       args:
       - "https://dex.example.com"  # Dex URL
       - "kubectl-ssh-oidc"         # Client ID
+      - "your-username"            # Username for JWT sub claim
 
 contexts:
 - name: ssh-oidc-context
@@ -240,6 +241,8 @@ users:
         value: "kubernetes"
       - name: CACHE_TOKENS
         value: "true"
+      - name: KUBECTL_SSH_USER
+        value: "your-username"          # Username for JWT sub claim
 
 contexts:
 - name: ssh-oidc-context
@@ -249,6 +252,25 @@ contexts:
 ```
 
 ## Usage
+
+### Username Configuration
+
+The plugin requires a username for the JWT `sub` claim to identify which user to authenticate in Dex. You can specify this in three ways:
+
+1. **Command line argument** (3rd argument):
+   ```bash
+   kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc your-username
+   ```
+
+2. **Environment variable**:
+   ```bash
+   export KUBECTL_SSH_USER=your-username
+   kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
+   ```
+
+3. **System username fallback**: If neither is provided, uses your system username (`$USER`)
+
+**Important**: The username must match a user configured in your Dex SSH connector configuration.
 
 ### Basic Usage
 
@@ -283,7 +305,11 @@ export SSH_KEY_PATHS="/path/to/key1:/path/to/key2"  # Custom SSH key paths
 ### Command Line Arguments
 
 ```bash
-# Specify Dex URL and client ID
+# Specify Dex URL, client ID, and username
+kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc your-username
+
+# Or use environment variable for username
+export KUBECTL_SSH_USER=your-username
 kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
 ```
 
@@ -393,7 +419,7 @@ kubectl-ssh_oidc https://dex.example.com
 
 | Issue | Diagnosis | Solution |
 |-------|-----------|----------|
-| No SSH keys in agent | `ssh-add -l` shows no keys | `ssh-add ~/.ssh/id_rsa` |
+| No SSH keys in agent | `ssh-add -l` shows no keys | `ssh-add ~/.ssh/id_ed25519` |
 | SSH agent not running | `SSH_AUTH_SOCK` not set | `eval $(ssh-agent -s)` |
 | Key not authorized in Dex | Plugin returns auth error | Check fingerprint matches Dex config |
 | Token expired | Authentication fails | Plugin should auto-refresh, check Dex logs |
@@ -410,7 +436,7 @@ make check-ssh
 make ssh-fingerprints
 
 # Test plugin directly
-kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
+kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc your-username
 ```
 
 ## Security Considerations

@@ -134,7 +134,7 @@ func CreateSSHSignedJWT(config *Config) (string, error) {
 
 **Key Points:**
 - Discovers keys from both SSH agent and filesystem following SSH client defaults
-- Standard SSH location discovery: `id_rsa`, `id_ed25519`, `id_ecdsa`, etc.
+- Standard SSH location discovery: `id_ed25519`, `id_rsa`, `id_ecdsa`, etc.
 - Tries each key in sequence until one succeeds (standard SSH behavior)
 - Supports encrypted filesystem keys with passphrase prompting (3 attempts)
 - Comprehensive error reporting showing all key attempts

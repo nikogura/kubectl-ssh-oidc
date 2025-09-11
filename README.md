@@ -92,7 +92,7 @@ The plugin supports multiple SSH key sources and follows standard SSH client beh
 eval $(ssh-agent -s)
 
 # Add your SSH key
-ssh-add ~/.ssh/id_rsa
+ssh-add ~/.ssh/id_ed25519
 
 # Verify keys are loaded
 ssh-add -l
@@ -101,10 +101,10 @@ ssh-add -l
 #### Option B: Filesystem Keys (No Agent Required)
 ```bash
 # Plugin automatically discovers keys from standard locations:
-# ~/.ssh/id_rsa, ~/.ssh/id_ed25519, ~/.ssh/id_ecdsa, etc.
+# ~/.ssh/id_ed25519, ~/.ssh/id_rsa, ~/.ssh/id_ecdsa, etc.
 
 # For encrypted keys, you'll be prompted for passphrase:
-# Enter passphrase for /home/user/.ssh/id_rsa: [hidden]
+# Enter passphrase for /home/user/.ssh/id_ed25519: [hidden]
 
 # Custom key paths via environment variable:
 export SSH_KEY_PATHS="/path/to/key1:/path/to/key2"
@@ -125,7 +125,7 @@ export SSH_USE_AGENT=true   # Default: true
 ssh-add -l
 
 # For filesystem keys  
-ssh-keygen -lf ~/.ssh/id_rsa.pub
+ssh-keygen -lf ~/.ssh/id_ed25519.pub
 
 # Or use make target to show all
 make ssh-fingerprints
@@ -242,11 +242,14 @@ users:
       apiVersion: client.authentication.k8s.io/v1beta1
       command: kubectl-ssh_oidc
       args:
-      - "https://dex.example.com"
-      - "kubectl-ssh-oidc"
+      - "https://dex.example.com"        # Dex URL
+      - "kubectl-ssh-oidc"              # Client ID  
+      - "your-username"                 # Username for JWT sub claim
       env:
       - name: DEX_URL
         value: "https://dex.example.com"
+      - name: KUBECTL_SSH_USER
+        value: "your-username"          # Alternative to 3rd arg
 
 contexts:
 - name: ssh-oidc-context
@@ -256,6 +259,25 @@ contexts:
 ```
 
 ## 🎯 Usage
+
+### Username Configuration
+
+The plugin requires a username for the JWT `sub` claim to identify which user to authenticate in Dex. You can specify this in three ways:
+
+1. **Command line argument** (3rd argument):
+   ```bash
+   kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc your-username
+   ```
+
+2. **Environment variable**:
+   ```bash
+   export KUBECTL_SSH_USER=your-username
+   kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
+   ```
+
+3. **System username fallback**: If neither is provided, uses your system username (`$USER`)
+
+**Important**: The username must match a user configured in your Dex SSH connector configuration.
 
 ### Basic Usage
 
@@ -289,14 +311,18 @@ export SSH_KEY_PATHS="/path/to/key1:/path/to/key2"  # Custom SSH key paths
 
 ```bash
 # Generate credentials manually (uses agent + filesystem keys)
-kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
+kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc your-username
 
 # Use only filesystem keys (no agent)
-SSH_USE_AGENT=false kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
+SSH_USE_AGENT=false kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc your-username
 
 # Use specific key only
-SSH_KEY_PATHS="/home/user/.ssh/work_key" SSH_IDENTITIES_ONLY=true \
-  kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
+SSH_KEY_PATHS="/home/user/.ssh/id_ed25519" SSH_IDENTITIES_ONLY=true \
+  kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc your-username
+
+# Using environment variable for username
+export KUBECTL_SSH_USER=your-username
+kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
 ```
 
 ## 🔐 RBAC Configuration
@@ -388,9 +414,10 @@ make check-ssh
 
 | Issue | Solution |
 |-------|----------|
-| `No SSH keys found` | Ensure keys in `~/.ssh/` or add to agent: `ssh-add ~/.ssh/id_rsa` |
+| `No SSH keys found` | Ensure keys in `~/.ssh/` or add to agent: `ssh-add ~/.ssh/id_ed25519` |
 | `SSH agent not running` | `eval $(ssh-agent -s)` or use `SSH_USE_AGENT=false` |
 | `Key not authorized in Dex` | Check fingerprint matches Dex config |
+| `User not found in Dex` | Set username: `kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc your-username` or `export KUBECTL_SSH_USER=your-username` |
 | `Passphrase prompt fails` | Ensure TTY available or use unencrypted keys |
 | `OIDC validation failed` | Verify kube-apiserver OIDC settings |
 | `Permission denied` | Check RBAC configuration |
@@ -399,8 +426,12 @@ make check-ssh
 ### Debug Mode
 
 ```bash
+# Enable debug output
 export DEBUG=true
-kubectl-ssh_oidc https://dex.example.com
+kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc your-username
+
+# Check what username will be used
+echo "Username: ${KUBECTL_SSH_USER:-$(whoami)}"
 ```
 
 ## 🔒 Security Considerations
