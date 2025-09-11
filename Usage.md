@@ -317,21 +317,27 @@ kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
 
 ### 1. Build Custom Dex
 
-The SSH connector needs to be compiled into Dex:
+The SSH connector needs to be compiled into Dex. The integration has been tested and validated with Dex v2.39.1:
 
 ```bash
-# Clone Dex
-git clone https://github.com/dexidp/dex
+# Clone Dex (tested with v2.39.1)
+git clone --branch=v2.39.1 --depth=1 https://github.com/dexidp/dex
 cd dex
 
+# Create SSH connector directory
+mkdir -p connector/ssh
+
 # Copy the SSH connector from this repository
-cp -r /path/to/kubectl-ssh-oidc/pkg/ssh ./connector/ssh
+curl -sSL https://raw.githubusercontent.com/nikogura/kubectl-ssh-oidc/main/pkg/ssh/ssh.go -o connector/ssh/ssh.go
 
-# Update connector imports in cmd/dex/serve.go
-# Add: _ "github.com/dexidp/dex/connector/ssh"
+# Add SSH connector import to server/server.go (NOT cmd/dex/serve.go)
+sed -i '/\"github.com\/dexidp\/dex\/connector\/oidc\"/a\\t\"github.com/dexidp/dex/connector/ssh\"' server/server.go
 
-# Build Dex
-make build
+# Add SSH connector to ConnectorsConfig map in server/server.go
+sed -i '/\"oidc\":[[:space:]]*func()/a\\t\"ssh\":            func() ConnectorConfig { return new(ssh.Config) },' server/server.go
+
+# Build Dex with CGO support (required for SQLite3)
+CGO_ENABLED=1 make build
 ```
 
 ### 2. Deploy Dex

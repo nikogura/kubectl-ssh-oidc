@@ -2,64 +2,6 @@
 
 This document outlines current limitations, known issues, and potential improvements for the kubectl-ssh-oidc plugin.
 
-## ✅ **Recently Fixed (v1.2+)**
-
-### ~~1. Single SSH Key Support~~ - **FIXED** ✅
-
-**✅ SOLUTION:** The plugin now follows standard SSH behavior:
-
-**Client-side:** Tries each SSH key in sequence until one succeeds  
-**Server-side:** Supports multiple SSH keys per user in Dex configuration
-
-```bash
-# Works automatically now - no workarounds needed
-$ ssh-add -l
-256 SHA256:AAAA... laptop-key (ED25519)  # Tries first - not authorized
-4096 SHA256:BBBB... work-key (RSA)       # Tries second - succeeds ✅
-256 SHA256:CCCC... yubikey (ED25519)     # Not needed
-
-$ kubectl-ssh_oidc https://dex.example.com
-# ✅ Authentication succeeds with any authorized key
-```
-
-### ~~2. Dex Single Key Per User~~ - **FIXED** ✅
-
-**✅ SOLUTION:** Dex connector now supports multiple keys per user:
-
-```yaml
-# New configuration format
-users:
-  "alice":
-    keys:
-    - "SHA256:work-laptop-fingerprint"
-    - "SHA256:home-desktop-fingerprint"
-    - "SHA256:yubikey-fingerprint"
-    username: "alice"
-    email: "alice@example.com"
-    groups: ["developers"]
-```
-
-### ~~3. SSH Agent Only~~ - **FIXED** ✅
-
-**✅ SOLUTION:** Plugin now supports both SSH agent and filesystem keys:
-
-**Filesystem Keys:** Automatically discovers and loads keys from standard SSH locations
-**Encrypted Keys:** Prompts for passphrases using standard SSH behavior (3 attempts)
-**Key Discovery:** Follows SSH client defaults (~/.ssh/id_ed25519, id_rsa, etc.)
-
-```bash
-# Works with filesystem keys (no agent required)
-$ export SSH_USE_AGENT=false
-$ kubectl-ssh_oidc https://dex.example.com
-Enter passphrase for /home/user/.ssh/id_ed25519: [hidden]
-# ✅ Authentication succeeds with filesystem key
-
-# Custom key locations
-$ export SSH_KEY_PATHS="/path/to/key1:/path/to/key2"
-$ kubectl-ssh_oidc https://dex.example.com
-# ✅ Uses specified keys only
-```
-
 ## 🚨 Current Limitations
 
 ### 1. No Key Caching/Performance Optimization
@@ -112,35 +54,38 @@ kubectl-ssh_oidc https://dex.example.com
 ### Debug Authentication Issues
 
 ```bash
-# View detailed error messages with key sources
+# Enable verbose output
 kubectl-ssh_oidc https://dex.example.com 2>&1 | grep -A 10 "authentication failed"
 
-# Check available keys
-ssh-add -l  # Agent keys
-ls ~/.ssh/id_*  # Filesystem keys
+# Check SSH agent status
+ssh-add -l
 
 # Verify key fingerprints match Dex configuration
 ssh-keygen -lf ~/.ssh/id_ed25519.pub
 ```
 
-## 📈 Project Status
+## 🔮 Future Enhancements
 
-- ✅ **Core SSH Standard Behavior**: Implemented
-- ✅ **Multiple Keys Per User**: Implemented  
-- ✅ **Filesystem Key Support**: Implemented
-- ✅ **Passphrase Prompting**: Implemented
-- ✅ **Comprehensive Error Handling**: Implemented
-- ✅ **Backward Compatibility**: Maintained
-- 🟡 **Performance Optimizations**: Future enhancement
+### Potential Improvements
 
-## 🎯 Future Enhancements (Low Priority)
+1. **Key Caching:** Remember successful key for faster subsequent authentications
+2. **Parallel Key Testing:** Try multiple keys concurrently (with rate limiting)
+3. **Pre-flight Validation:** Optional endpoint to check key status before full authentication
+4. **Hardware Security Module (HSM) Support:** Enhanced integration with PIV cards and security keys
+5. **Audit Logging:** Optional detailed logging for compliance and debugging
 
-1. **Key Caching**: Remember successful key for session
-2. **Discovery API**: Pre-flight key authorization checking  
-3. **Interactive Selection**: When multiple keys available
-4. **Configuration Profiles**: Per-cluster key preferences
-5. **Hardware Token Support**: PKCS#11 and FIDO2 keys
+### Community Contributions
+
+These limitations represent opportunities for community contributions. See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.
+
+## 📞 Support
+
+If you encounter issues not covered here:
+
+1. Check the [troubleshooting guide](README.md#troubleshooting)
+2. Review [GitHub issues](https://github.com/nikogura/kubectl-ssh-oidc/issues)
+3. Create a new issue with detailed reproduction steps
 
 ---
 
-**Note:** All major limitations have been resolved. The plugin now provides full SSH client compatibility with both agent and filesystem keys, following standard SSH behavior for key discovery, iteration, and passphrase handling.
+**Note:** This plugin is actively maintained. Limitations are documented transparently to help users make informed decisions and to guide future development priorities.

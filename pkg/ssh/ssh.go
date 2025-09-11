@@ -52,12 +52,18 @@ type UserInfo struct {
 // SSHConnector implements the Dex connector interface for SSH key authentication.
 type SSHConnector struct {
 	config Config
+	logger interface{}
 }
 
 // Open creates a new SSH connector.
+// The logger parameter is interface{} for compatibility with different Dex versions:
+// - Older versions (v2.13.0+incompatible) use interface{}
+// - Newer versions (v2.39.1+) use log.Logger
+// When integrating with newer Dex versions, cast logger to log.Logger as needed.
 func (c *Config) Open(id string, logger interface{}) (connector.Connector, error) {
 	return &SSHConnector{
 		config: *c,
+		logger: logger,
 	}, nil
 }
 

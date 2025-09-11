@@ -196,7 +196,7 @@ connectors:
 
 ### 4. Deploy Custom Dex with SSH Connector
 
-The SSH connector is included in this repository in the `pkg/ssh` package and acts as a Dex connector. To use it:
+The SSH connector is included in this repository in the `pkg/ssh` package and acts as a Dex connector. The integration has been tested and validated with Dex v2.39.1. To use it:
 
 ```bash
 # Build a custom Dex with the SSH connector
@@ -468,7 +468,7 @@ This project includes:
 - **kubectl**: v1.20+
 - **Go**: 1.21+ (for building from source)
 - **SSH Keys**: SSH agent or filesystem keys (OpenSSH format)
-- **Dex**: v2.35+ with custom SSH connector (see [Usage.md](Usage.md) for setup)
+- **Dex**: v2.39.1+ with custom SSH connector (see [Usage.md](Usage.md) for setup)
 - **Kubernetes**: v1.20+ with OIDC support configured
 
 ## 🤝 Contributing
