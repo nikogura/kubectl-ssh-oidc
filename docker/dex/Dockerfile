@@ -14,8 +14,8 @@ RUN git clone --depth=1 --branch=${DEX_VERSION} https://github.com/dexidp/dex.gi
 # Create SSH connector directory
 RUN mkdir -p dex/connector/ssh
 
-# Copy SSH connector source file with Dex v2.39.1 compatibility
-COPY ssh.go dex/connector/ssh/ssh.go
+# Copy SSH connector with Dex-compatible interface
+COPY docker/dex/ssh.go dex/connector/ssh/ssh.go
 
 # Add SSH connector import to Dex
 RUN cd dex && \

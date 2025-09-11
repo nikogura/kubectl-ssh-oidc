@@ -4,8 +4,8 @@ services:
   # Custom Dex with SSH connector
   dex:
     build:
-      context: ../../docker/dex
-      dockerfile: Dockerfile
+      context: ../../
+      dockerfile: docker/dex/Dockerfile
     image: kubectl-ssh-oidc/dex:latest
     ports:
       - "5556:5556"

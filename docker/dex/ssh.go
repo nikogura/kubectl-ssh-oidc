@@ -2,7 +2,6 @@ package ssh
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -56,11 +55,7 @@ type SSHConnector struct {
 	logger log.Logger
 }
 
-// Open creates a new SSH connector.
-// The logger parameter is interface{} for compatibility with different Dex versions:
-// - Older versions (v2.13.0+incompatible) use interface{}
-// - Newer versions (v2.39.1+) use log.Logger
-// When integrating with newer Dex versions, cast logger to log.Logger as needed.
+// Open creates a new SSH connector with the correct Dex interface signature.
 func (c *Config) Open(id string, logger log.Logger) (connector.Connector, error) {
 	return &SSHConnector{
 		config: *c,
@@ -203,45 +198,7 @@ func (c *SSHConnector) validateSSHJWT(sshJWTString string) (connector.Identity, 
 		Groups:        append(userInfo.Groups, c.config.DefaultGroups...),
 	}
 
-	// Note: PreferredUsername field may not be available in all versions of dex connector
-	// Setting display name would go here if the field exists in the connector.Identity struct
-
 	return identity, nil
-}
-
-// verifySSHSignature verifies the SSH signature on the JWT.
-func (c *SSHConnector) verifySSHSignature(token, signatureB64, format, publicKeyB64 string) error {
-	// Decode public key
-	publicKeyBytes, err := base64.StdEncoding.DecodeString(publicKeyB64)
-	if err != nil {
-		return fmt.Errorf("failed to decode public key: %w", err)
-	}
-
-	publicKey, err := ssh.ParsePublicKey(publicKeyBytes)
-	if err != nil {
-		return fmt.Errorf("failed to parse public key: %w", err)
-	}
-
-	// Decode signature
-	signatureBytes, err := base64.StdEncoding.DecodeString(signatureB64)
-	if err != nil {
-		return fmt.Errorf("failed to decode signature: %w", err)
-	}
-
-	// Create SSH signature structure
-	signature := &ssh.Signature{
-		Format: format,
-		Blob:   signatureBytes,
-	}
-
-	// Verify signature
-	data := []byte(token)
-	verifyErr := publicKey.Verify(data, signature)
-	if verifyErr != nil {
-		return fmt.Errorf("signature verification failed: %w", verifyErr)
-	}
-
-	return nil
 }
 
 // findUserByUsernameAndKey finds a user by username and verifies the key is authorized.
@@ -290,103 +247,6 @@ func (c *SSHConnector) isAllowedIssuer(issuer string) bool {
 	}
 
 	return false
-}
-
-// TokenURL returns the token endpoint URL for this connector.
-func (c *SSHConnector) TokenURL() string {
-	return "/ssh/auth"
-}
-
-// HandleTokenRequest processes SSH JWT authentication requests directly.
-// This provides a simple endpoint for kubectl-ssh-oidc to authenticate with SSH keys.
-func (c *SSHConnector) HandleTokenRequest(w http.ResponseWriter, r *http.Request) {
-	// Only accept POST requests
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Parse form data
-	err := r.ParseForm()
-	if err != nil {
-		http.Error(w, "Failed to parse form", http.StatusBadRequest)
-		return
-	}
-
-	// Get SSH JWT assertion - accept both 'assertion' and 'ssh_jwt' parameters
-	assertion := r.FormValue("assertion")
-	if assertion == "" {
-		assertion = r.FormValue("ssh_jwt")
-	}
-	if assertion == "" {
-		http.Error(w, "Missing SSH JWT parameter (assertion or ssh_jwt)", http.StatusBadRequest)
-		return
-	}
-
-	// Validate SSH JWT and get identity
-	identity, err := c.validateSSHJWT(assertion)
-	if err != nil {
-		c.logger.Errorf("SSH JWT validation failed: %v", err)
-		// Return authentication failed error that matches test expectations
-		http.Error(w, fmt.Sprintf("authentication failed: %v", err), http.StatusUnauthorized)
-		return
-	}
-
-	// Generate access token
-	accessToken, err := c.generateAccessToken(identity)
-	if err != nil {
-		c.logger.Errorf("Token generation failed: %v", err)
-		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
-		return
-	}
-
-	// Return successful token response
-	tokenResp := map[string]interface{}{
-		"access_token": accessToken,
-		"token_type":   "Bearer",
-		"expires_in":   c.config.TokenTTL,
-		"id_token":     accessToken, // For kubectl compatibility
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Pragma", "no-cache")
-	
-	encodeErr := json.NewEncoder(w).Encode(tokenResp)
-	if encodeErr != nil {
-		c.logger.Errorf("Failed to encode response: %v", encodeErr)
-		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-		return
-	}
-	
-	c.logger.Infof("SSH authentication successful for user: %s", identity.Username)
-}
-
-// generateAccessToken generates an access token for the authenticated user.
-func (c *SSHConnector) generateAccessToken(identity connector.Identity) (string, error) {
-	// Create claims for the access token
-	claims := jwt.MapClaims{
-		"iss":    "dex-ssh-connector",
-		"sub":    identity.UserID,
-		"aud":    "kubernetes",
-		"exp":    time.Now().Add(time.Duration(c.config.TokenTTL) * time.Second).Unix(),
-		"iat":    time.Now().Unix(),
-		"email":  identity.Email,
-		"groups": identity.Groups,
-		"name":   identity.Username,
-	}
-
-	// Sign token (in practice, use Dex's signing key)
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-
-	// This is a placeholder - in real implementation, use Dex's internal signing mechanisms
-	secretKey := []byte("your-secret-key") // Should come from Dex configuration
-	tokenString, err := token.SignedString(secretKey)
-	if err != nil {
-		return "", err
-	}
-
-	return tokenString, nil
 }
 
 // SSHSigningMethodServer implements JWT signing method for server-side SSH verification.

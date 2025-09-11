@@ -120,20 +120,38 @@ export SSH_USE_AGENT=true   # Default: true
 
 ### 2. Get SSH Key Fingerprints
 
+You need SSH key fingerprints for the Dex configuration. Use standard SSH tooling:
+
 ```bash
-# For agent keys
+# For any public key file (most common method)
+ssh-keygen -lf ~/.ssh/id_rsa.pub
+ssh-keygen -lf ~/.ssh/id_ed25519.pub  
+ssh-keygen -lf ~/.ssh/id_ecdsa.pub
+
+# For keys loaded in ssh-agent
 ssh-add -l
 
-# For filesystem keys  
-ssh-keygen -lf ~/.ssh/id_ed25519.pub
+# For a specific public key file
+ssh-keygen -lf /path/to/your/key.pub
+```
 
-# Or use make target to show all
+**Example output:**
+```
+2048 SHA256:anwBv8OdPTZNsC3Und/btMdqxE71uYUugjkztuUhLH0 user@hostname (RSA)
+```
+
+**Use the SHA256 portion** (including "SHA256:") in your Dex configuration:
+- ✅ Correct: `"SHA256:anwBv8OdPTZNsC3Und/btMdqxE71uYUugjkztuUhLH0"`
+- ❌ Wrong: `"anwBv8OdPTZNsC3Und/btMdqxE71uYUugjkztuUhLH0"`
+
+```bash
+# Or use make target to show all available fingerprints
 make ssh-fingerprints
 ```
 
 ### 3. Configure Dex
 
-Create or update your Dex configuration:
+Create or update your Dex configuration (use the fingerprints from step 2):
 
 ```yaml
 # dex-config.yaml
@@ -155,9 +173,9 @@ connectors:
     users:
       "john.doe":
         keys:
-        - "SHA256:work-laptop-key-fingerprint"
-        - "SHA256:home-desktop-key-fingerprint" 
-        - "SHA256:yubikey-ssh-key-fingerprint"
+        - "SHA256:anwBv8OdPTZNsC3Und/btMdqxE71uYUugjkztuUhLH0"
+        - "SHA256:LzKNhWlSG7V7z3nhebyilCadN10jF6mNX6StO8FZ1iM" 
+        - "SHA256:4wMtClwjjbq6znF1DhoRTijpisje/QNkdfujTrNT8NE"
         username: "john.doe"
         email: "john.doe@example.com"
         full_name: "John Doe"
@@ -167,8 +185,8 @@ connectors:
       
       "jane.smith":
         keys:
-        - "SHA256:jane-work-key-fingerprint"
-        - "SHA256:jane-personal-key-fingerprint"
+        - "SHA256:7B2+8jXTyF9qK5mPvN3wR8sH6uY4oL1cE5gF2nA7bX0"
+        - "SHA256:nRXBUAkAt6GX8/eVtjWQLmtdsAR6s6Voe92DF7JRWJk"
         username: "jane.smith"
         email: "jane.smith@example.com"
         full_name: "Jane Smith"
@@ -178,7 +196,7 @@ connectors:
     
     # Legacy format: One key per user (deprecated but still supported)
     # authorized_keys:
-    #   "SHA256:legacy-key-fingerprint":
+    #   "SHA256:ReaXtz6Lw2YafMuyKNsn09uopRoV/DSdfMz3auedlc4":
     #     username: "legacy.user"
     #     email: "legacy@example.com"
     #     full_name: "Legacy User"
