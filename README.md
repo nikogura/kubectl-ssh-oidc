@@ -67,6 +67,15 @@ chmod +x kubectl-ssh_oidc
 sudo mv kubectl-ssh_oidc /usr/local/bin/
 ```
 
+### Go Install (Recommended for Go users)
+
+```bash
+# Install directly from GitHub (requires Go 1.21+)
+go install github.com/nikogura/kubectl-ssh-oidc@latest
+```
+
+**Note:** The binary will be installed to `$GOPATH/bin/kubectl-ssh-oidc` or `$HOME/go/bin/kubectl-ssh-oidc`. Ensure this directory is in your `PATH`.
+
 ### Build from Source
 
 ```bash
@@ -406,7 +415,7 @@ make lint
 
 ```
 kubectl-ssh-oidc/
-├── cmd/kubectl-ssh-oidc/     # Main plugin executable
+├── main.go                   # Main plugin executable
 ├── pkg/
 │   ├── kubectl/              # kubectl plugin implementation
 │   │   └── mocks/            # Mock objects for testing
