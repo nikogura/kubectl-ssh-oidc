@@ -27,6 +27,12 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Semver
+      uses: paulhatch/semantic-version@v5.1.0
+      with:
+        bump_each_commit: true
+      id: semver
+
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
@@ -69,12 +75,6 @@ jobs:
     # - name: Run integration tests
     #   run: make test-integration
     #   timeout-minutes: 10
-
-    - name: Semver
-      uses: paulhatch/semantic-version@v5.1.0
-      with:
-        bump_each_commit: true
-      id: semver
 
     - name: Upload test logs on failure
       if: failure()
