@@ -57,7 +57,7 @@ jobs:
     - name: Set up golangci-lint
       uses: golangci/golangci-lint-action@v6
       with:
-        version: v1.62.0
+        version: latest
 
     - name: Run linting
       run: make lint
