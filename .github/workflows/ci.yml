@@ -19,6 +19,9 @@ jobs:
   test:
     name: Unit, Lint, and End-to-End Integration Tests
     runs-on: ubuntu-latest
+
+    outputs:
+      semver: ${{steps.semver.outputs.version_tag}}
     
     steps:
     - name: Checkout code
