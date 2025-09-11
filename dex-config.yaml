@@ -1,0 +1,81 @@
+issuer: https://dex.example.com
+
+storage:
+  type: kubernetes
+  config:
+    inCluster: true
+
+web:
+  http: 0.0.0.0:5556
+  # For production, use HTTPS
+  # https: 0.0.0.0:5554
+  # tlsCert: /etc/dex/tls/tls.crt
+  # tlsKey: /etc/dex/tls/tls.key
+
+# Configuration for telemetry
+telemetry:
+  http: 0.0.0.0:5558
+
+# OAuth2 clients
+oauth2:
+  skipApprovalScreen: true
+
+staticClients:
+- id: kubectl-ssh-oidc
+  redirectURIs:
+  - 'urn:ietf:wg:oauth:2.0:oob'
+  - 'http://localhost:8080'
+  - 'http://localhost:18000'
+  name: 'kubectl SSH OIDC Plugin'
+  secret: kubectl-ssh-oidc-secret
+
+# SSH connector configuration
+connectors:
+- type: ssh
+  id: ssh
+  name: SSH Key Authentication
+  config:
+    # Map SSH key fingerprints to user information
+    authorized_keys:
+      "SHA256:abc123def456...": # Replace with actual SSH key fingerprints
+        username: "john.doe"
+        email: "john.doe@example.com"
+        full_name: "John Doe"
+        groups:
+        - "developers"
+        - "kubernetes-users"
+      
+      "SHA256:xyz789uvw456...": # Another SSH key
+        username: "jane.smith"
+        email: "jane.smith@example.com"
+        full_name: "Jane Smith"
+        groups:
+        - "admins"
+        - "kubernetes-admins"
+    
+    # JWT issuers that are allowed
+    allowed_issuers:
+    - "kubectl-ssh-oidc"
+    
+    # Default groups for all authenticated users
+    default_groups:
+    - "authenticated"
+    
+    # Token TTL in seconds (1 hour)
+    token_ttl: 3600
+
+# Enable CORS for web-based clients
+web:
+  allowedOrigins: ['*']
+
+# Enable the grpc API. This is required for some clients.
+grpc:
+  addr: 0.0.0.0:5557
+  # For production, use TLS
+  # tlsCert: /etc/dex/tls/server.crt
+  # tlsKey: /etc/dex/tls/server.key
+  # tlsCA: /etc/dex/tls/ca.crt
+
+logger:
+  level: "debug"
+  format: "text"

@@ -1,0 +1,372 @@
+package ssh
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/dexidp/dex/connector"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
+
+	"github.com/nikogura/kubectl-ssh-oidc/testdata"
+)
+
+func TestConfig_Open(t *testing.T) {
+	config := &Config{
+		AuthorizedKeys: map[string]UserInfo{
+			"SHA256:test-fingerprint": {
+				Username: "testuser",
+				Email:    "test@example.com",
+				Groups:   []string{"developers"},
+				FullName: "Test User",
+			},
+		},
+		AllowedIssuers: []string{"test-issuer"},
+		DefaultGroups:  []string{"authenticated"},
+		TokenTTL:       3600,
+	}
+
+	conn, err := config.Open("test-id", nil)
+
+	require.NoError(t, err)
+	assert.NotNil(t, conn)
+	assert.IsType(t, &SSHConnector{}, conn)
+}
+
+func TestSSHConnector_LoginURL(t *testing.T) {
+	config := &Config{}
+	conn, _ := config.Open("test", nil)
+	sshConnector := conn.(*SSHConnector)
+
+	scopes := connector.Scopes{}
+	loginURL, err := sshConnector.LoginURL(scopes, "http://callback.example.com", "test-state")
+
+	require.NoError(t, err)
+	assert.Equal(t, "http://callback.example.com?state=test-state&ssh_auth=true", loginURL)
+}
+
+func TestSSHConnector_HandleCallback_NoJWT(t *testing.T) {
+	config := &Config{}
+	conn, _ := config.Open("test", nil)
+	sshConnector := conn.(*SSHConnector)
+
+	scopes := connector.Scopes{}
+	req := httptest.NewRequest(http.MethodPost, "/callback", strings.NewReader(""))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	identity, err := sshConnector.HandleCallback(scopes, req)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no SSH JWT provided")
+	assert.Equal(t, connector.Identity{}, identity)
+}
+
+func TestSSHConnector_TokenURL(t *testing.T) {
+	config := &Config{}
+	conn, _ := config.Open("test", nil)
+	sshConnector := conn.(*SSHConnector)
+
+	url := sshConnector.TokenURL()
+	assert.Equal(t, "/ssh/token", url)
+}
+
+func TestSSHConnector_verifySSHSignature(t *testing.T) {
+	_, testSigner, testPubKeyBytes, err := testdata.GenerateTestSSHKey()
+	require.NoError(t, err)
+
+	config := &Config{}
+	conn, _ := config.Open("test", nil)
+	sshConnector := conn.(*SSHConnector)
+
+	testData := "test data to verify"
+
+	t.Run("valid signature", func(t *testing.T) {
+		// Sign test data
+		signature, signErr := testSigner.Sign(nil, []byte(testData))
+		require.NoError(t, signErr)
+
+		// Verify signature
+		verifyErr := sshConnector.verifySSHSignature(
+			testData,
+			base64.StdEncoding.EncodeToString(signature.Blob),
+			signature.Format,
+			base64.StdEncoding.EncodeToString(testPubKeyBytes),
+		)
+
+		assert.NoError(t, verifyErr)
+	})
+
+	t.Run("invalid signature", func(t *testing.T) {
+		// Use wrong signature
+		invalidSignature := base64.StdEncoding.EncodeToString([]byte("invalid-signature"))
+
+		verifyErr := sshConnector.verifySSHSignature(
+			testData,
+			invalidSignature,
+			"rsa-sha2-256",
+			base64.StdEncoding.EncodeToString(testPubKeyBytes),
+		)
+
+		require.Error(t, verifyErr)
+		assert.Contains(t, verifyErr.Error(), "signature verification failed")
+	})
+
+	t.Run("invalid public key", func(t *testing.T) {
+		invalidPubKey := base64.StdEncoding.EncodeToString([]byte("invalid-key"))
+
+		err = sshConnector.verifySSHSignature(
+			testData,
+			"signature",
+			"rsa-sha2-256",
+			invalidPubKey,
+		)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to parse public key")
+	})
+}
+
+func TestSSHConnector_isAllowedIssuer(t *testing.T) {
+	tests := []struct {
+		name           string
+		allowedIssuers []string
+		testIssuer     string
+		expected       bool
+	}{
+		{
+			name:           "empty allowed issuers allows all",
+			allowedIssuers: []string{},
+			testIssuer:     "any-issuer",
+			expected:       true,
+		},
+		{
+			name:           "issuer in allowed list",
+			allowedIssuers: []string{"issuer1", "issuer2"},
+			testIssuer:     "issuer1",
+			expected:       true,
+		},
+		{
+			name:           "issuer not in allowed list",
+			allowedIssuers: []string{"issuer1", "issuer2"},
+			testIssuer:     "issuer3",
+			expected:       false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := &Config{AllowedIssuers: tt.allowedIssuers}
+			conn, _ := config.Open("test", nil)
+			sshConnector := conn.(*SSHConnector)
+
+			result := sshConnector.isAllowedIssuer(tt.testIssuer)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestSSHConnector_validateSSHJWT(t *testing.T) {
+	// Setup test SSH key and connector
+	testPubKey, testSigner, testPubKeyBytes, err := testdata.GenerateTestSSHKey()
+	require.NoError(t, err)
+
+	fingerprint := ssh.FingerprintSHA256(testPubKey)
+
+	config := &Config{
+		AuthorizedKeys: map[string]UserInfo{
+			fingerprint: {
+				Username: "testuser",
+				Email:    "test@example.com",
+				Groups:   []string{"developers"},
+				FullName: "Test User",
+			},
+		},
+		AllowedIssuers: []string{"test-issuer"},
+		DefaultGroups:  []string{"authenticated"},
+		TokenTTL:       3600,
+	}
+
+	conn, _ := config.Open("test", nil)
+	sshConnector := conn.(*SSHConnector)
+
+	t.Run("successful validation", func(t *testing.T) {
+		// Create valid JWT claims
+		now := time.Now()
+		claims := &SSHJWTClaims{
+			RegisteredClaims: jwt.RegisteredClaims{
+				Issuer:    "test-issuer",
+				Audience:  jwt.ClaimStrings{"test-audience"},
+				Subject:   fingerprint,
+				ExpiresAt: jwt.NewNumericDate(now.Add(5 * time.Minute)),
+				IssuedAt:  jwt.NewNumericDate(now),
+				NotBefore: jwt.NewNumericDate(now),
+			},
+			KeyFingerprint: fingerprint,
+			KeyComment:     "test-key@example.com",
+			PublicKey:      base64.StdEncoding.EncodeToString(testPubKeyBytes),
+		}
+
+		// Create unsigned token
+		token := jwt.NewWithClaims(jwt.SigningMethodNone, claims)
+		tokenString, signErr := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
+		require.NoError(t, signErr)
+
+		// Sign the token with SSH key
+		signature, signErr := testSigner.Sign(nil, []byte(tokenString))
+		require.NoError(t, signErr)
+
+		// Create SSH signed JWT
+		sshJWT := SSHSignedJWT{
+			Token:     tokenString,
+			Signature: base64.StdEncoding.EncodeToString(signature.Blob),
+			Format:    signature.Format,
+		}
+
+		sshJWTBytes, marshalErr := json.Marshal(sshJWT)
+		require.NoError(t, marshalErr)
+		require.NoError(t, err)
+		sshJWTString := base64.StdEncoding.EncodeToString(sshJWTBytes)
+
+		// Test validation
+		identity, validateErr := sshConnector.validateSSHJWT(sshJWTString)
+
+		require.NoError(t, validateErr)
+		assert.Equal(t, "testuser", identity.UserID)
+		assert.Equal(t, "testuser", identity.Username)
+		assert.Equal(t, "test@example.com", identity.Email)
+		assert.True(t, identity.EmailVerified)
+		assert.Contains(t, identity.Groups, "developers")
+		assert.Contains(t, identity.Groups, "authenticated")
+	})
+
+	t.Run("expired token", func(t *testing.T) {
+		// Create expired JWT
+		now := time.Now()
+		claims := &SSHJWTClaims{
+			RegisteredClaims: jwt.RegisteredClaims{
+				Issuer:    "test-issuer",
+				Audience:  jwt.ClaimStrings{"test-audience"},
+				Subject:   fingerprint,
+				ExpiresAt: jwt.NewNumericDate(now.Add(-5 * time.Minute)), // Expired
+				IssuedAt:  jwt.NewNumericDate(now.Add(-10 * time.Minute)),
+				NotBefore: jwt.NewNumericDate(now.Add(-10 * time.Minute)),
+			},
+			KeyFingerprint: fingerprint,
+			KeyComment:     "test-key@example.com",
+			PublicKey:      base64.StdEncoding.EncodeToString(testPubKeyBytes),
+		}
+
+		token := jwt.NewWithClaims(jwt.SigningMethodNone, claims)
+		tokenString, tokenErr := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
+		require.NoError(t, tokenErr)
+
+		signature, signErr := testSigner.Sign(nil, []byte(tokenString))
+		require.NoError(t, signErr)
+
+		sshJWT := SSHSignedJWT{
+			Token:     tokenString,
+			Signature: base64.StdEncoding.EncodeToString(signature.Blob),
+			Format:    signature.Format,
+		}
+
+		sshJWTBytes, marshalErr := json.Marshal(sshJWT)
+		require.NoError(t, marshalErr)
+		require.NoError(t, err)
+		sshJWTString := base64.StdEncoding.EncodeToString(sshJWTBytes)
+
+		identity, validateErr := sshConnector.validateSSHJWT(sshJWTString)
+
+		require.Error(t, validateErr)
+		assert.Contains(t, validateErr.Error(), "token is expired")
+		assert.Equal(t, connector.Identity{}, identity)
+	})
+}
+
+func TestSSHConnector_generateAccessToken(t *testing.T) {
+	config := &Config{
+		TokenTTL: 3600,
+	}
+
+	conn, _ := config.Open("test", nil)
+	sshConnector := conn.(*SSHConnector)
+
+	identity := connector.Identity{
+		UserID:        "testuser",
+		Username:      "testuser",
+		Email:         "test@example.com",
+		EmailVerified: true,
+		Groups:        []string{"developers", "authenticated"},
+	}
+
+	token, err := sshConnector.generateAccessToken(identity)
+
+	require.NoError(t, err)
+	assert.NotEmpty(t, token)
+
+	// Parse token to verify claims
+	parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
+		// Return the secret key used in generateAccessToken
+		return []byte("your-secret-key"), nil
+	})
+
+	require.NoError(t, err)
+	require.True(t, parsedToken.Valid)
+
+	claims, ok := parsedToken.Claims.(jwt.MapClaims)
+	require.True(t, ok)
+
+	assert.Equal(t, "dex-ssh-connector", claims["iss"])
+	assert.Equal(t, "testuser", claims["sub"])
+	assert.Equal(t, "kubernetes", claims["aud"])
+	assert.Equal(t, "test@example.com", claims["email"])
+	assert.Equal(t, "testuser", claims["name"])
+
+	// Verify groups claim
+	groupsClaim, ok := claims["groups"].([]interface{})
+	require.True(t, ok)
+	assert.Len(t, groupsClaim, 2)
+}
+
+func TestSSHConnector_HandleTokenRequest_InvalidGrantType(t *testing.T) {
+	config := &Config{}
+	conn, _ := config.Open("test", nil)
+	sshConnector := conn.(*SSHConnector)
+
+	form := url.Values{}
+	form.Set("grant_type", "invalid_grant_type")
+
+	req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	w := httptest.NewRecorder()
+	sshConnector.HandleTokenRequest(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "Unsupported grant type")
+}
+
+func TestSSHConnector_HandleTokenRequest_MissingAssertion(t *testing.T) {
+	config := &Config{}
+	conn, _ := config.Open("test", nil)
+	sshConnector := conn.(*SSHConnector)
+
+	form := url.Values{}
+	form.Set("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer")
+
+	req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	w := httptest.NewRecorder()
+	sshConnector.HandleTokenRequest(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "Missing assertion parameter")
+}

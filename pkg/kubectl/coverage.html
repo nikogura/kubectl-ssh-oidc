@@ -1,0 +1,385 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>kubectl: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/nikogura/kubectl-ssh-oidc/pkg/kubectl/kubectl.go (35.1%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package kubectl
+
+import (
+        "context"
+        "encoding/base64"
+        "encoding/json"
+        "errors"
+        "fmt"
+        "io"
+        "net"
+        "net/http"
+        "net/url"
+        "os"
+        "time"
+
+        "github.com/golang-jwt/jwt/v5"
+        "golang.org/x/crypto/ssh"
+        "golang.org/x/crypto/ssh/agent"
+        metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+        clientauthv1beta1 "k8s.io/client-go/pkg/apis/clientauthentication/v1beta1"
+)
+
+// Config represents the plugin configuration.
+type Config struct {
+        DexURL      string `json:"dex_url"`
+        ClientID    string `json:"client_id"`
+        Audience    string `json:"audience"`
+        CacheTokens bool   `json:"cache_tokens"`
+}
+
+// SSHJWTClaims represents JWT claims for SSH authentication.
+type SSHJWTClaims struct {
+        jwt.RegisteredClaims
+        KeyFingerprint string `json:"key_fingerprint"`
+        KeyComment     string `json:"key_comment,omitempty"`
+        PublicKey      string `json:"public_key"`
+}
+
+// DexTokenResponse represents the response from Dex token endpoint.
+type DexTokenResponse struct {
+        AccessToken  string `json:"access_token"`
+        TokenType    string `json:"token_type"`
+        ExpiresIn    int    `json:"expires_in"`
+        RefreshToken string `json:"refresh_token,omitempty"`
+        IDToken      string `json:"id_token,omitempty"`
+}
+
+// SSHAgentClient wraps SSH agent functionality.
+type SSHAgentClient struct {
+        agent agent.ExtendedAgent
+}
+
+// NewSSHAgentClient creates a new SSH agent client.
+func NewSSHAgentClient() (*SSHAgentClient, error) <span class="cov0" title="0">{
+        dialer := &amp;net.Dialer{}
+        conn, err := dialer.DialContext(context.Background(), "unix", os.Getenv("SSH_AUTH_SOCK"))
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to connect to SSH agent: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">return &amp;SSHAgentClient{
+                agent: agent.NewClient(conn),
+        }, nil</span>
+}
+
+// GetKeys returns all SSH keys from the agent.
+func (c *SSHAgentClient) GetKeys() (keys []*agent.Key, err error) <span class="cov8" title="1">{
+        keys, err = c.agent.List()
+        if err != nil </span><span class="cov8" title="1">{
+                return nil, fmt.Errorf("failed to list SSH keys: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">if len(keys) == 0 </span><span class="cov8" title="1">{
+                return nil, errors.New("no SSH keys found in agent")
+        }</span>
+
+        <span class="cov8" title="1">return keys, nil</span>
+}
+
+// SignData signs data with the first available SSH key.
+func (c *SSHAgentClient) SignData(data []byte) (*ssh.Signature, ssh.PublicKey, error) <span class="cov8" title="1">{
+        keys, err := c.GetKeys()
+        if err != nil </span><span class="cov8" title="1">{
+                return nil, nil, err
+        }</span>
+
+        // Use the first key for signing
+        <span class="cov8" title="1">key := keys[0]
+        signature, err := c.agent.Sign(key, data)
+        if err != nil </span><span class="cov8" title="1">{
+                return nil, nil, fmt.Errorf("failed to sign data: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">pubKey, err := ssh.ParsePublicKey(key.Blob)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, nil, fmt.Errorf("failed to parse public key: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">return signature, pubKey, nil</span>
+}
+
+// CreateSSHSignedJWT creates a JWT signed with an SSH key from the agent.
+func CreateSSHSignedJWT(config *Config) (signedJWT string, err error) <span class="cov0" title="0">{
+        sshClient, err := NewSSHAgentClient()
+        if err != nil </span><span class="cov0" title="0">{
+                return "", err
+        }</span>
+
+        // Get SSH keys from agent
+        <span class="cov0" title="0">keys, err := sshClient.GetKeys()
+        if err != nil </span><span class="cov0" title="0">{
+                return "", err
+        }</span>
+
+        <span class="cov0" title="0">if len(keys) == 0 </span><span class="cov0" title="0">{
+                return "", errors.New("no SSH keys available in agent")
+        }</span>
+
+        // Use the first available key
+        <span class="cov0" title="0">sshKey := keys[0]
+        pubKey, err := ssh.ParsePublicKey(sshKey.Blob)
+        if err != nil </span><span class="cov0" title="0">{
+                return "", fmt.Errorf("failed to parse public key: %w", err)
+        }</span>
+
+        // Generate key fingerprint
+        <span class="cov0" title="0">fingerprint := ssh.FingerprintSHA256(pubKey)
+
+        // Create JWT claims
+        now := time.Now()
+        claims := &amp;SSHJWTClaims{
+                RegisteredClaims: jwt.RegisteredClaims{
+                        Issuer:    "kubectl-ssh-oidc",
+                        Audience:  jwt.ClaimStrings{config.Audience},
+                        Subject:   fingerprint, // Use SSH key fingerprint as subject
+                        ExpiresAt: jwt.NewNumericDate(now.Add(5 * time.Minute)),
+                        IssuedAt:  jwt.NewNumericDate(now),
+                        NotBefore: jwt.NewNumericDate(now),
+                },
+                KeyFingerprint: fingerprint,
+                KeyComment:     sshKey.Comment,
+                PublicKey:      base64.StdEncoding.EncodeToString(sshKey.Blob),
+        }
+
+        // Create unsigned token
+        token := jwt.NewWithClaims(jwt.SigningMethodNone, claims)
+        tokenString, err := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
+        if err != nil </span><span class="cov0" title="0">{
+                return "", fmt.Errorf("failed to create token: %w", err)
+        }</span>
+
+        // Sign the token with SSH key
+        <span class="cov0" title="0">tokenBytes := []byte(tokenString)
+        signature, _, err := sshClient.SignData(tokenBytes)
+        if err != nil </span><span class="cov0" title="0">{
+                return "", err
+        }</span>
+
+        // Create final JWT with SSH signature
+        <span class="cov0" title="0">signedToken := &amp;SSHSignedJWT{
+                Token:     tokenString,
+                Signature: base64.StdEncoding.EncodeToString(signature.Blob),
+                Format:    signature.Format,
+        }
+
+        signedTokenBytes, err := json.Marshal(signedToken)
+        if err != nil </span><span class="cov0" title="0">{
+                return "", fmt.Errorf("failed to marshal signed token: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">signedJWT = base64.StdEncoding.EncodeToString(signedTokenBytes)
+        return signedJWT, nil</span>
+}
+
+// SSHSignedJWT represents a JWT signed with SSH key.
+type SSHSignedJWT struct {
+        Token     string `json:"token"`
+        Signature string `json:"signature"`
+        Format    string `json:"format"`
+}
+
+// ExchangeWithDex exchanges the SSH-signed JWT for an OIDC token from Dex.
+func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) <span class="cov0" title="0">{
+        // Custom token endpoint for SSH JWT exchange
+        tokenURL := fmt.Sprintf("%s/token", config.DexURL)
+
+        // Prepare form data
+        data := url.Values{}
+        data.Set("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer")
+        data.Set("assertion", sshJWT)
+        data.Set("client_id", config.ClientID)
+        data.Set("scope", "openid profile email groups")
+
+        // Make request to Dex
+        req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, tokenURL, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to create request: %w", err)
+        }</span>
+        <span class="cov0" title="0">req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+        req.PostForm = data
+
+        client := &amp;http.Client{}
+        resp, err := client.Do(req)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to request token from Dex: %w", err)
+        }</span>
+        <span class="cov0" title="0">defer resp.Body.Close()
+
+        // Read response
+        body, err := io.ReadAll(resp.Body)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to read response body: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">if resp.StatusCode != http.StatusOK </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("token request failed with status %d: %s", resp.StatusCode, string(body))
+        }</span>
+
+        // Parse token response
+        <span class="cov0" title="0">var tokenResp DexTokenResponse
+        parseErr := json.Unmarshal(body, &amp;tokenResp)
+        if parseErr != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to parse token response: %w", parseErr)
+        }</span>
+
+        <span class="cov0" title="0">return &amp;tokenResp, nil</span>
+}
+
+// LoadConfig loads configuration from environment or default values.
+func LoadConfig() *Config <span class="cov8" title="1">{
+        config := &amp;Config{
+                DexURL:      getEnvOrDefault("DEX_URL", "https://dex.example.com"),
+                ClientID:    getEnvOrDefault("CLIENT_ID", "kubectl-ssh-oidc"),
+                Audience:    getEnvOrDefault("AUDIENCE", "kubernetes"),
+                CacheTokens: getEnvOrDefault("CACHE_TOKENS", "true") == "true",
+        }
+
+        // Override with command line args if provided
+        if len(os.Args) &gt; 1 </span><span class="cov8" title="1">{
+                config.DexURL = os.Args[1]
+        }</span>
+        <span class="cov8" title="1">if len(os.Args) &gt; 2 </span><span class="cov8" title="1">{
+                config.ClientID = os.Args[2]
+        }</span>
+
+        <span class="cov8" title="1">return config</span>
+}
+
+// getEnvOrDefault returns environment variable value or default.
+func getEnvOrDefault(key, defaultValue string) string <span class="cov8" title="1">{
+        if value := os.Getenv(key); value != "" </span><span class="cov8" title="1">{
+                return value
+        }</span>
+        <span class="cov8" title="1">return defaultValue</span>
+}
+
+// OutputExecCredential outputs the kubectl exec credential.
+func OutputExecCredential(token string, expiresIn int) error <span class="cov8" title="1">{
+        // Calculate expiration time
+        var expiration *metav1.Time
+        if expiresIn &gt; 0 </span><span class="cov8" title="1">{
+                exp := time.Now().Add(time.Duration(expiresIn) * time.Second)
+                expiration = &amp;metav1.Time{Time: exp}
+        }</span>
+
+        // Create exec credential
+        <span class="cov8" title="1">cred := &amp;clientauthv1beta1.ExecCredential{
+                TypeMeta: metav1.TypeMeta{
+                        APIVersion: "client.authentication.k8s.io/v1beta1",
+                        Kind:       "ExecCredential",
+                },
+                Status: &amp;clientauthv1beta1.ExecCredentialStatus{
+                        Token:               token,
+                        ExpirationTimestamp: expiration,
+                },
+        }
+
+        // Output as JSON
+        encoder := json.NewEncoder(os.Stdout)
+        encoder.SetIndent("", "  ")
+        return encoder.Encode(cred)</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>
