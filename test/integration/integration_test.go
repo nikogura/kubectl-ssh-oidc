@@ -340,7 +340,7 @@ func testSuccessfulAuthWithGoodUserMultipleKeys(t *testing.T, _ string, key1Path
 func buildKubectlSSHOIDC(t *testing.T) string {
 	binaryPath := filepath.Join(t.TempDir(), "kubectl-ssh-oidc-test")
 
-	cmd := exec.Command("go", "build", "-o", binaryPath, "../../cmd/kubectl-ssh-oidc")
+	cmd := exec.Command("go", "build", "-o", binaryPath, "../..")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("Failed to build kubectl-ssh-oidc: %v\nOutput: %s", err, output)

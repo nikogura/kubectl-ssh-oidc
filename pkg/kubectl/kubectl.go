@@ -126,11 +126,17 @@ func (c *UnifiedSSHClient) GetKeys() ([]*SSHKey, error) {
 		agentKeys, err := c.getAgentKeys()
 		if err == nil {
 			allKeys = append(allKeys, agentKeys...)
+
+			// If we have agent keys and no specific key paths requested, use agent keys only
+			// This avoids decrypting filesystem keys unnecessarily
+			if len(agentKeys) > 0 && len(c.config.SSHKeyPaths) == 0 {
+				return allKeys, nil
+			}
 		}
 		// Continue even if agent keys fail - this matches SSH behavior
 	}
 
-	// Get keys from filesystem
+	// Get keys from filesystem (only if no agent keys found, or specific keys requested)
 	fsKeys, err := c.getFilesystemKeys()
 	if err != nil {
 		if len(allKeys) == 0 {

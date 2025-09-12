@@ -54,17 +54,17 @@ graph LR
 ```bash
 # Download latest release for your platform
 # Linux AMD64
-curl -L "https://github.com/nikogura/kubectl-ssh-oidc/releases/latest/download/kubectl-ssh_oidc-linux-amd64" -o kubectl-ssh_oidc
+curl -L "https://github.com/nikogura/kubectl-ssh-oidc/releases/latest/download/kubectl-ssh_oidc-linux-amd64" -o kubectl-ssh-oidc
 
 # macOS AMD64 (Intel)
-curl -L "https://github.com/nikogura/kubectl-ssh-oidc/releases/latest/download/kubectl-ssh_oidc-darwin-amd64" -o kubectl-ssh_oidc
+curl -L "https://github.com/nikogura/kubectl-ssh-oidc/releases/latest/download/kubectl-ssh_oidc-darwin-amd64" -o kubectl-ssh-oidc
 
 # macOS ARM64 (Apple Silicon)
-curl -L "https://github.com/nikogura/kubectl-ssh-oidc/releases/latest/download/kubectl-ssh_oidc-darwin-arm64" -o kubectl-ssh_oidc
+curl -L "https://github.com/nikogura/kubectl-ssh-oidc/releases/latest/download/kubectl-ssh_oidc-darwin-arm64" -o kubectl-ssh-oidc
 
 # Make executable and install
-chmod +x kubectl-ssh_oidc
-sudo mv kubectl-ssh_oidc /usr/local/bin/
+chmod +x kubectl-ssh-oidc
+sudo mv kubectl-ssh-oidc /usr/local/bin/
 ```
 
 ### Go Install (Recommended for Go users)
@@ -267,7 +267,7 @@ users:
   user:
     exec:
       apiVersion: client.authentication.k8s.io/v1beta1
-      command: kubectl-ssh_oidc
+      command: kubectl-ssh-oidc
       args:
       - "https://dex.example.com"        # Dex URL
       - "kubectl-ssh-oidc"              # Client ID  
@@ -293,13 +293,13 @@ The plugin requires a username for the JWT `sub` claim to identify which user to
 
 1. **Command line argument** (3rd argument):
    ```bash
-   kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc your-username
+   kubectl-ssh-oidc https://dex.example.com kubectl-ssh-oidc your-username
    ```
 
 2. **Environment variable**:
    ```bash
    export KUBECTL_SSH_USER=your-username
-   kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
+   kubectl-ssh-oidc https://dex.example.com kubectl-ssh-oidc
    ```
 
 3. **System username fallback**: If neither is provided, uses your system username (`$USER`)
@@ -338,18 +338,18 @@ export SSH_KEY_PATHS="/path/to/key1:/path/to/key2"  # Custom SSH key paths
 
 ```bash
 # Generate credentials manually (uses agent + filesystem keys)
-kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc your-username
+kubectl-ssh-oidc https://dex.example.com kubectl-ssh-oidc your-username
 
 # Use only filesystem keys (no agent)
-SSH_USE_AGENT=false kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc your-username
+SSH_USE_AGENT=false kubectl-ssh-oidc https://dex.example.com kubectl-ssh-oidc your-username
 
 # Use specific key only
 SSH_KEY_PATHS="/home/user/.ssh/id_ed25519" SSH_IDENTITIES_ONLY=true \
-  kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc your-username
+  kubectl-ssh-oidc https://dex.example.com kubectl-ssh-oidc your-username
 
 # Using environment variable for username
 export KUBECTL_SSH_USER=your-username
-kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
+kubectl-ssh-oidc https://dex.example.com kubectl-ssh-oidc
 ```
 
 ## 🔐 RBAC Configuration
@@ -444,7 +444,7 @@ make check-ssh
 | `No SSH keys found` | Ensure keys in `~/.ssh/` or add to agent: `ssh-add ~/.ssh/id_ed25519` |
 | `SSH agent not running` | `eval $(ssh-agent -s)` or use `SSH_USE_AGENT=false` |
 | `Key not authorized in Dex` | Check fingerprint matches Dex config |
-| `User not found in Dex` | Set username: `kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc your-username` or `export KUBECTL_SSH_USER=your-username` |
+| `User not found in Dex` | Set username: `kubectl-ssh-oidc https://dex.example.com kubectl-ssh-oidc your-username` or `export KUBECTL_SSH_USER=your-username` |
 | `Passphrase prompt fails` | Ensure TTY available or use unencrypted keys |
 | `OIDC validation failed` | Verify kube-apiserver OIDC settings |
 | `Permission denied` | Check RBAC configuration |
@@ -455,7 +455,7 @@ make check-ssh
 ```bash
 # Enable debug output
 export DEBUG=true
-kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc your-username
+kubectl-ssh-oidc https://dex.example.com kubectl-ssh-oidc your-username
 
 # Check what username will be used
 echo "Username: ${KUBECTL_SSH_USER:-$(whoami)}"
