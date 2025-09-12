@@ -17,7 +17,7 @@ env:
 
 jobs:
   test:
-    name: Unit, Lint, and End-to-End Integration Tests
+    name: Test and Publish
     runs-on: ubuntu-latest
 
     steps:
