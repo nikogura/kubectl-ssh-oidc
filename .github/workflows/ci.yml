@@ -15,6 +15,11 @@ on:
 env:
   GO_VERSION: '1.24'
 
+permissions:
+  contents: write
+  packages: write
+  pull-requests: write
+
 jobs:
   test:
     name: Test and Publish
@@ -23,11 +28,15 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Semver
-      uses: paulhatch/semantic-version@v5.1.0
+      uses: paulhatch/semantic-version@v5.4.0
       with:
         bump_each_commit: true
+        tag_prefix: ""
+        format: "${major}.${minor}.${patch}"
       id: semver
 
     - name: Set up Go
@@ -88,18 +97,19 @@ jobs:
       run: make clean-integration
 
     - name: Tag Repo
-      uses: mathieudutour/github-tag-action@v6.1
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      uses: mathieudutour/github-tag-action@v6.2
       with:
-        github_token: ${{secrets.TAGGING_PAT}}
-        custom_tag: ${{steps.semver.outputs.version_tag}}
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        custom_tag: ${{ steps.semver.outputs.version_tag }}
         tag_prefix: ""
 
-    - name: Publish Release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.TAGGING_PAT }}
+    - name: Publish Release  
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{steps.semver.outputs.version_tag}}
-        release_name: ${{steps.semver.outputs.version_tag}}
+        tag_name: ${{ steps.semver.outputs.version_tag }}
+        name: ${{ steps.semver.outputs.version_tag }}
         draft: false
         prerelease: false
+        token: ${{ secrets.GITHUB_TOKEN }}
