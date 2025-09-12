@@ -99,7 +99,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.TAGGING_PAT }}
       with:
-        tag_name: ${{needs.test.outputs.semver}}
+        tag_name: ${{steps.semver.outputs.version_tag}}
         release_name: ${{steps.semver.outputs.version_tag}}
         draft: false
         prerelease: false
