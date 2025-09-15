@@ -60,7 +60,7 @@ func TestSSHConnector_HandleCallback_NoJWT(t *testing.T) {
 	identity, err := sshConnector.HandleCallback(scopes, req)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no SSH JWT provided")
+	assert.Contains(t, err.Error(), "no SSH JWT or authorization code provided")
 	assert.Equal(t, connector.Identity{}, identity)
 }
 

@@ -374,10 +374,10 @@ func validateJWTToken(t *testing.T, tokenString, expectedUsername string) {
 	err = json.Unmarshal(headerBytes, &header)
 	require.NoError(t, err, "Should be able to parse JWT header JSON")
 
-	// Verify algorithm is HMAC-SHA256 (not SSH)
+	// Verify algorithm is RSA-SHA256 (not SSH)
 	alg, ok := header["alg"].(string)
 	require.True(t, ok, "JWT header should have string algorithm")
-	assert.Equal(t, "HS256", alg, "Token should use HS256 algorithm, not SSH")
+	assert.Equal(t, "RS256", alg, "Token should use RS256 algorithm for Kubernetes compatibility")
 
 	// Verify token type
 	typ, ok := header["typ"].(string)

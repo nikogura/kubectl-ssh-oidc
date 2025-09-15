@@ -583,7 +583,7 @@ func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) {
 	baseURL := strings.TrimSuffix(config.DexURL, "/")
 	tokenURL := baseURL + "/auth/ssh/token"
 
-	// Use SSH JWT parameter as the SSH connector expects
+	// Direct SSH JWT authentication - custom kubectl credential plugin flow
 	formData := url.Values{
 		"ssh_jwt": {sshJWT},
 	}
