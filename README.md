@@ -422,6 +422,12 @@ make build-all
 # Run tests
 make test
 
+# Run integration tests (includes unit tests + lint as prerequisites)
+make test-integration-local
+
+# Run all tests (unit + lint + full integration with Docker)
+make test-all
+
 # Lint code
 make lint
 ```

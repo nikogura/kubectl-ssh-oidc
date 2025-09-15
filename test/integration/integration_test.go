@@ -214,12 +214,17 @@ func testSuccessfulAuthWithGoodUserKey(t *testing.T, _ string, keyPath, username
 	cmd.Env = append(os.Environ(), env...)
 
 	output, err := cmd.CombinedOutput()
+	outputStr := string(output)
+
+	t.Logf("Command output: %s", outputStr)
+	if err != nil {
+		t.Logf("Command error: %v", err)
+	}
 
 	// Should succeed
 	require.NoError(t, err, "Authentication should succeed with valid user/key")
 
 	// Verify we got a token response
-	outputStr := string(output)
 	assert.Contains(t, outputStr, "token", "Expected to receive a token")
 
 	t.Log("✅ Successful authentication with good user/key verified!")

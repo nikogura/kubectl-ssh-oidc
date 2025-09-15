@@ -70,11 +70,24 @@ test-coverage: test
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
 
-# Run integration tests with custom Dex
+# Run integration tests with custom Dex (includes unit tests and lint as prerequisites)
 .PHONY: test-integration
-test-integration:
+test-integration: test lint
 	@echo "Running end-to-end integration tests..."
+	@echo "✅ Unit tests and lint checks passed - proceeding with integration tests"
 	./test/integration/run-integration-tests.sh
+
+# Run full local integration tests with Go (fast version)
+.PHONY: test-integration-local
+test-integration-local: test lint
+	@echo "Running local integration tests with Go..."
+	@echo "✅ Unit tests and lint checks passed - proceeding with integration tests"
+	INTEGRATION_TEST=true go test -v -timeout 120s ./test/integration
+
+# Run all tests (unit + integration)
+.PHONY: test-all
+test-all: test lint test-integration
+	@echo "✅ All tests passed (unit + lint + integration)!"
 
 # Build custom Dex image for integration testing
 .PHONY: build-dex
@@ -134,7 +147,9 @@ help:
 	@echo "  install-system  Install system-wide (requires sudo)"
 	@echo "  test            Run unit tests"
 	@echo "  test-coverage   Run tests with coverage report"
-	@echo "  test-integration Run end-to-end integration tests"
+	@echo "  test-integration Run end-to-end integration tests (with unit+lint prereqs)"
+	@echo "  test-integration-local Run local Go integration tests (fast, with unit+lint prereqs)"
+	@echo "  test-all        Run all tests (unit + lint + integration)"
 	@echo "  verify-dex      Verify custom Dex image works"
 	@echo "  clean-integration Clean integration test environment"
 	@echo "  lint            Lint the code"

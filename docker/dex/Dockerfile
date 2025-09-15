@@ -17,6 +17,12 @@ RUN mkdir -p dex/connector/ssh
 # Copy SSH connector with Dex-compatible interface
 COPY pkg/ssh/ssh.go dex/connector/ssh/ssh.go
 
+# Patch SSH connector for Dex v2.39.1+ compatibility
+RUN cd dex/connector/ssh && \
+    sed -i 's|"github.com/dexidp/dex/connector"|"github.com/dexidp/dex/connector"\n\t"github.com/dexidp/dex/pkg/log"|' ssh.go && \
+    sed -i 's|func (c \*Config) Open(id string, logger interface{})|func (c *Config) Open(id string, logger log.Logger)|' ssh.go && \
+    sed -i 's|logger interface{}|logger log.Logger|' ssh.go
+
 # Add SSH connector import to Dex and custom endpoint routing
 RUN cd dex && \
     sed -i '/\"github.com\/dexidp\/dex\/connector\/oidc\"/a\\t\"github.com/dexidp/dex/connector/ssh\"' server/server.go && \

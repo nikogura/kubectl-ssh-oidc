@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/dexidp/dex/connector"
@@ -417,4 +418,200 @@ func (m *SSHSigningMethodServer) Verify(signingString string, signature []byte, 
 	}
 
 	return nil
+}
+
+// HandleDirectTokenRequest handles direct SSH token exchange requests.
+// This method implements the direct token endpoint that bypasses OAuth2 redirects.
+func (c *SSHConnector) HandleDirectTokenRequest(w http.ResponseWriter, r *http.Request) {
+	// Parse the SSH JWT from form data
+	err := r.ParseForm()
+	if err != nil {
+		http.Error(w, "Failed to parse form data", http.StatusBadRequest)
+		return
+	}
+
+	sshJWT := r.FormValue("ssh_jwt")
+	if sshJWT == "" {
+		http.Error(w, "Missing ssh_jwt parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Verify and process the SSH JWT
+	identity, err := c.handleJWTAuth(sshJWT)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Authentication failed: %v", err), http.StatusUnauthorized)
+		return
+	}
+
+	// Generate OIDC token response
+	tokenResponse := map[string]interface{}{
+		"access_token": "ssh-" + sshJWT, // Use SSH JWT as access token
+		"token_type":   "Bearer",
+		"expires_in":   c.config.TokenTTL,
+		"id_token":     sshJWT, // The SSH JWT serves as the ID token
+		"user_info": map[string]interface{}{
+			"sub":                identity.UserID,
+			"name":               identity.Username,
+			"email":              identity.Email,
+			"groups":             identity.Groups,
+			"preferred_username": identity.Username,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	encodeErr := json.NewEncoder(w).Encode(tokenResponse)
+	if encodeErr != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+}
+
+// handleJWTAuth processes and validates an SSH-signed JWT using multi-pass evaluation.
+func (c *SSHConnector) handleJWTAuth(sshJWT string) (connector.Identity, error) {
+	claims, err := c.extractJWTClaims(sshJWT)
+	if err != nil {
+		return connector.Identity{}, err
+	}
+
+	validateErr := c.validateAudienceAndSubject(claims)
+	if validateErr != nil {
+		return connector.Identity{}, validateErr
+	}
+
+	username, ok := claims["sub"].(string)
+	if !ok {
+		return connector.Identity{}, errors.New("missing username in JWT")
+	}
+	userInfo, userKeys, err := c.getUserConfig(username)
+	if err != nil {
+		return connector.Identity{}, err
+	}
+
+	return c.verifySignatureAndCreateIdentity(sshJWT, claims, userInfo, userKeys)
+}
+
+// extractJWTClaims parses JWT and extracts claims.
+func (c *SSHConnector) extractJWTClaims(sshJWT string) (jwt.MapClaims, error) {
+	token, err := jwt.Parse(sshJWT, func(token *jwt.Token) (interface{}, error) {
+		return []byte("dummy"), nil
+	})
+
+	if err != nil {
+		return c.extractClaimsManually(sshJWT)
+	}
+
+	if token == nil {
+		return nil, errors.New("invalid JWT token")
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, errors.New("failed to parse JWT claims")
+	}
+
+	return claims, nil
+}
+
+// extractClaimsManually extracts claims from JWT payload when parsing fails.
+func (c *SSHConnector) extractClaimsManually(sshJWT string) (jwt.MapClaims, error) {
+	parts := strings.Split(sshJWT, ".")
+	if len(parts) != 3 {
+		return nil, errors.New("invalid JWT format")
+	}
+
+	payloadBytes, decodeErr := base64.RawURLEncoding.DecodeString(parts[1])
+	if decodeErr != nil {
+		return nil, fmt.Errorf("failed to decode JWT payload: %w", decodeErr)
+	}
+
+	var claims jwt.MapClaims
+	unmarshalErr := json.Unmarshal(payloadBytes, &claims)
+	if unmarshalErr != nil {
+		return nil, fmt.Errorf("failed to parse JWT claims: %w", unmarshalErr)
+	}
+
+	return claims, nil
+}
+
+// validateAudienceAndSubject validates audience and subject claims.
+func (c *SSHConnector) validateAudienceAndSubject(claims jwt.MapClaims) error {
+	aud, ok := claims["aud"].(string)
+	if !ok {
+		return errors.New("missing audience in JWT")
+	}
+	if aud != "kubernetes" {
+		return fmt.Errorf("invalid audience: expected 'kubernetes', got '%s'", aud)
+	}
+
+	_, ok = claims["sub"].(string)
+	if !ok {
+		return errors.New("missing username in JWT")
+	}
+
+	return nil
+}
+
+// getUserConfig retrieves user configuration by username.
+func (c *SSHConnector) getUserConfig(username string) (*UserInfo, []string, error) {
+	userConfig, exists := c.config.Users[username]
+	if !exists {
+		return nil, nil, fmt.Errorf("user %s not found in configuration", username)
+	}
+
+	if len(userConfig.Keys) == 0 {
+		return nil, nil, fmt.Errorf("no authorized keys configured for user %s", username)
+	}
+
+	return &userConfig.UserInfo, userConfig.Keys, nil
+}
+
+// verifySignatureAndCreateIdentity verifies SSH signature and creates identity.
+func (c *SSHConnector) verifySignatureAndCreateIdentity(
+	sshJWT string,
+	claims jwt.MapClaims,
+	userInfo *UserInfo,
+	userKeys []string,
+) (connector.Identity, error) {
+	parts := strings.Split(sshJWT, ".")
+	if len(parts) != 3 {
+		return connector.Identity{}, errors.New("invalid JWT format")
+	}
+
+	signingString := parts[0] + "." + parts[1]
+	signature := parts[2]
+
+	sshSignatureBytes, decodeErr := base64.RawURLEncoding.DecodeString(signature)
+	if decodeErr != nil {
+		return connector.Identity{}, fmt.Errorf("failed to decode JWT signature: %w", decodeErr)
+	}
+	sshSignatureB64 := string(sshSignatureBytes)
+
+	publicKeyB64, ok := claims["public_key"].(string)
+	if !ok {
+		return connector.Identity{}, errors.New("missing public_key in JWT")
+	}
+
+	keyFingerprint, ok := claims["key_fingerprint"].(string)
+	if !ok {
+		return connector.Identity{}, errors.New("missing key_fingerprint in JWT")
+	}
+
+	// Verify signature against each authorized key until one succeeds
+	for _, authorizedKeyFingerprint := range userKeys {
+		if authorizedKeyFingerprint == keyFingerprint {
+			verifyErr := c.verifySSHSignature(signingString, sshSignatureB64, "ssh-ed25519", publicKeyB64)
+			if verifyErr == nil {
+				return connector.Identity{
+					UserID:        userInfo.Username,
+					Username:      userInfo.Username,
+					Email:         userInfo.Email,
+					Groups:        append(userInfo.Groups, c.config.DefaultGroups...),
+					EmailVerified: true,
+				}, nil
+			}
+			return connector.Identity{}, fmt.Errorf("SSH signature verification failed for key %s: %w", keyFingerprint, verifyErr)
+		}
+	}
+
+	return connector.Identity{}, fmt.Errorf("key fingerprint %s not authorized for user %s", keyFingerprint, userInfo.Username)
 }
