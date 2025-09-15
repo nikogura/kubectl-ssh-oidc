@@ -17,10 +17,40 @@ RUN mkdir -p dex/connector/ssh
 # Copy SSH connector with Dex-compatible interface
 COPY docker/dex/ssh.go dex/connector/ssh/ssh.go
 
-# Add SSH connector import to Dex (temporarily without server routing)
+# Add SSH connector import to Dex and custom endpoint routing
 RUN cd dex && \
     sed -i '/\"github.com\/dexidp\/dex\/connector\/oidc\"/a\\t\"github.com/dexidp/dex/connector/ssh\"' server/server.go && \
     sed -i '/\"oidc\":[[:space:]]*func()/a\\t\"ssh\":            func() ConnectorConfig { return new(ssh.Config) },' server/server.go
+
+# Add SSH direct token endpoint route
+RUN cd dex && \
+    sed -i '/handleFunc.*\/callback.*handleConnectorCallback/a\\thandleFunc("/auth/ssh/token", s.handleSSHDirectToken)' server/server.go
+
+# Add SSH direct token handler method
+RUN cd dex && \
+    cat >> server/server.go << 'EOF'
+
+func (s *Server) handleSSHDirectToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	conn, err := s.getConnector("ssh")
+	if err != nil {
+		s.logger.Errorf("Failed to get SSH connector: %v", err)
+		http.Error(w, "SSH connector not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	if sshConn, ok := conn.Connector.(interface{ HandleDirectTokenRequest(http.ResponseWriter, *http.Request) }); ok {
+		sshConn.HandleDirectTokenRequest(w, r)
+	} else {
+		s.logger.Errorf("SSH connector doesn't implement HandleDirectTokenRequest")
+		http.Error(w, "SSH direct token not supported", http.StatusNotImplemented)
+	}
+}
+EOF
 
 # Build Dex with SSH connector
 RUN cd dex && \

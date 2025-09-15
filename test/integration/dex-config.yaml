@@ -17,9 +17,9 @@ connectors:
     users:
       "test-user":
         keys:
-        - "SHA256:anwBv8OdPTZNsC3Und/btMdqxE71uYUugjkztuUhLH0"
-        - "SHA256:LzKNhWlSG7V7z3nhebyilCadN10jF6mNX6StO8FZ1iM"
-        - "SHA256:QtT3D2M86TtfbdjCYu2koUFrY4IUNuuwj6RfSvy0fLg"
+        - "${TEST_KEY_FINGERPRINT_1}"
+        - "${TEST_KEY_FINGERPRINT_2}"
+        - "${TEST_KEY_FINGERPRINT_3}"
         username: "test-user"
         email: "test-user@example.com"
         groups:
@@ -44,6 +44,6 @@ connectors:
 staticClients:
 - id: kubectl-ssh-oidc
   redirectURIs:
-  - 'http://localhost:8000/callback'
+  - 'urn:ietf:wg:oauth:2.0:oob'
   name: 'kubectl SSH OIDC'
   secret: ZXhhbXBsZS1hcHAtc2VjcmV0

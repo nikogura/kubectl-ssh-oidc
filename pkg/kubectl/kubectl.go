@@ -557,7 +557,7 @@ func (e *MultiKeyAuthError) Error() string {
 }
 
 // ExchangeWithDex exchanges the SSH-signed JWT for an OIDC token from Dex.
-// Implements OAuth2 authorization code flow with SSH authentication.
+// Uses direct token exchange - sends SSH JWT directly to token endpoint.
 func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) {
 	err := validateJWT(sshJWT)
 	if err != nil {
@@ -565,22 +565,49 @@ func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) {
 	}
 
 	baseURL := strings.TrimSuffix(config.DexURL, "/")
-	client := createHTTPClient()
+	tokenURL := baseURL + "/auth/ssh/token"
 
-	// Step 1: Initiate OAuth2 flow and get SSH connector URL
-	sshAuthURL, err := initiateOAuth2Flow(client, baseURL, config.ClientID)
-	if err != nil {
-		return nil, err
+	// Create form data with SSH JWT
+	formData := url.Values{
+		"ssh_jwt": {sshJWT},
 	}
 
-	// Step 2: Send SSH JWT to connector and get authorization code
-	code, err := sendSSHJWTAndGetCode(client, sshAuthURL, sshJWT)
+	// Create HTTP request
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, tokenURL, strings.NewReader(formData.Encode()))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create token request: %w", err)
 	}
 
-	// Step 3: Exchange authorization code for tokens
-	return exchangeCodeForTokens(baseURL, code, config.ClientID, config.ClientSecret)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	// Send request
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to exchange with Dex: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Read response
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read token response: %w", err)
+	}
+
+	// Check for errors
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("SSH authentication failed (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	// Parse JSON response
+	var tokenResp DexTokenResponse
+	parseErr := json.Unmarshal(respBody, &tokenResp)
+	if parseErr != nil {
+		return nil, fmt.Errorf("failed to parse token response: %w", parseErr)
+	}
+
+	return &tokenResp, nil
 }
 
 // validateJWT validates the format of the SSH JWT.
@@ -595,164 +622,6 @@ func validateJWT(sshJWT string) error {
 	}
 
 	return nil
-}
-
-// createHTTPClient creates an HTTP client configured for OAuth2 flow.
-func createHTTPClient() *http.Client {
-	return &http.Client{
-		Timeout: 30 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			// Don't follow redirects - we need to handle them manually
-			return http.ErrUseLastResponse
-		},
-	}
-}
-
-// initiateOAuth2Flow starts the OAuth2 flow and returns the SSH connector URL.
-func initiateOAuth2Flow(client *http.Client, baseURL, clientID string) (string, error) {
-	authURL := baseURL + "/auth"
-	authParams := url.Values{}
-	authParams.Set("client_id", clientID)
-	authParams.Set("response_type", "code")
-	authParams.Set("scope", "openid email profile groups")
-	authParams.Set("redirect_uri", "http://localhost:8000/callback")
-	authParams.Set("connector_id", "ssh")
-
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, authURL+"?"+authParams.Encode(), nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create auth request: %w", err)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to initiate OAuth2 flow: %w", err)
-	}
-	resp.Body.Close()
-
-	if resp.StatusCode != http.StatusFound && resp.StatusCode != http.StatusSeeOther {
-		return "", fmt.Errorf("unexpected response from auth endpoint: %d", resp.StatusCode)
-	}
-
-	location := resp.Header.Get("Location")
-	if location == "" {
-		return "", errors.New("no redirect to SSH connector")
-	}
-
-	// Convert relative URL to absolute URL if needed
-	if strings.HasPrefix(location, "http") {
-		return location, nil
-	}
-	return baseURL + location, nil
-}
-
-// sendSSHJWTAndGetCode sends the SSH JWT to the connector and extracts the authorization code.
-func sendSSHJWTAndGetCode(client *http.Client, sshAuthURL, sshJWT string) (string, error) {
-	// Send SSH JWT as form data in POST request to the callback URL
-	formData := url.Values{}
-	formData.Set("ssh_jwt", sshJWT)
-
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, sshAuthURL, strings.NewReader(formData.Encode()))
-	if err != nil {
-		return "", fmt.Errorf("failed to create SSH callback request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to send SSH JWT to callback: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Handle successful redirect with authorization code
-	if resp.StatusCode == http.StatusFound || resp.StatusCode == http.StatusSeeOther {
-		return extractAuthorizationCode(resp)
-	}
-
-	// Handle error response
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read callback response: %w", err)
-	}
-
-	return "", fmt.Errorf("SSH authentication failed (%d): %s", resp.StatusCode, string(bodyBytes))
-}
-
-// extractAuthorizationCode extracts the authorization code from the redirect response.
-func extractAuthorizationCode(resp *http.Response) (string, error) {
-	redirectLocation := resp.Header.Get("Location")
-	if redirectLocation == "" {
-		return "", errors.New("callback succeeded but no redirect location provided")
-	}
-
-	redirectURL, err := url.Parse(redirectLocation)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse redirect URL: %w", err)
-	}
-
-	code := redirectURL.Query().Get("code")
-	if code == "" {
-		if errorParam := redirectURL.Query().Get("error"); errorParam != "" {
-			return "", fmt.Errorf("authentication failed: %s", errorParam)
-		}
-		return "", errors.New("no authorization code in callback response")
-	}
-
-	return code, nil
-}
-
-// exchangeCodeForTokens exchanges an OAuth2 authorization code for tokens using the standard Dex token endpoint.
-func exchangeCodeForTokens(baseURL, code, clientID, clientSecret string) (*DexTokenResponse, error) {
-	tokenURL := baseURL + "/token"
-
-	formData := url.Values{}
-	formData.Set("grant_type", "authorization_code")
-	formData.Set("code", code)
-	formData.Set("client_id", clientID)
-	formData.Set("client_secret", clientSecret)
-	formData.Set("redirect_uri", "http://localhost:8000/callback")
-
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, tokenURL, strings.NewReader(formData.Encode()))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create token request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to exchange code for tokens: %w", err)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read token response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		// Try to parse error response
-		var errorResp struct {
-			Error            string `json:"error"`
-			ErrorDescription string `json:"error_description"`
-		}
-		jsonErr := json.Unmarshal(bodyBytes, &errorResp)
-		if jsonErr == nil {
-			return nil, fmt.Errorf("token exchange failed (%d): %s - %s", resp.StatusCode, errorResp.Error, errorResp.ErrorDescription)
-		}
-		return nil, fmt.Errorf("token exchange failed (%d): %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	var tokenResp DexTokenResponse
-	err = json.Unmarshal(bodyBytes, &tokenResp)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse token response: %w", err)
-	}
-
-	return &tokenResp, nil
 }
 
 // LoadConfig loads configuration from environment or default values.
@@ -773,15 +642,24 @@ func LoadConfig() *Config {
 		config.SSHKeyPaths = strings.Split(keyPaths, ":")
 	}
 
-	// Override with command line args if provided
-	if len(os.Args) > 1 {
-		config.DexURL = os.Args[1]
+	// Parse command line args (skip flags like --debug)
+	var positionalArgs []string
+	for i := 1; i < len(os.Args); i++ {
+		arg := os.Args[i]
+		if !strings.HasPrefix(arg, "-") {
+			positionalArgs = append(positionalArgs, arg)
+		}
 	}
-	if len(os.Args) > 2 {
-		config.ClientID = os.Args[2]
+
+	// Override with positional command line args if provided
+	if len(positionalArgs) > 0 {
+		config.DexURL = positionalArgs[0]
 	}
-	if len(os.Args) > 3 {
-		config.Username = os.Args[3]
+	if len(positionalArgs) > 1 {
+		config.ClientID = positionalArgs[1]
+	}
+	if len(positionalArgs) > 2 {
+		config.Username = positionalArgs[2]
 	}
 
 	// Username is required for proper JWT claims

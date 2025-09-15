@@ -2,6 +2,7 @@ package ssh
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -49,6 +50,15 @@ type UserInfo struct {
 	FullName string   `json:"full_name"`
 }
 
+// TokenResponse represents the direct token response for CLI tools.
+type TokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+	IDToken      string `json:"id_token"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+}
+
 // SSHConnector implements the Dex connector interface for SSH key authentication.
 type SSHConnector struct {
 	config Config
@@ -84,21 +94,19 @@ func (c *SSHConnector) LoginURL(scopes connector.Scopes, callbackURL, state stri
 }
 
 // HandleCallback processes the SSH authentication callback.
+// For CLI tools, this endpoint validates SSH JWTs and returns tokens directly.
 func (c *SSHConnector) HandleCallback(scopes connector.Scopes, r *http.Request) (identity connector.Identity, err error) {
-	c.logger.Infof("SSH connector: processing authentication callback")
+	c.logger.Infof("SSH connector: processing direct token request")
 	c.logger.Debugf("SSH connector: request method %s, URL %s", r.Method, r.URL.String())
 	
-	// Log all form parameters (excluding sensitive JWT content)
-	for key, values := range r.Form {
-		if key == "ssh_jwt" {
-			c.logger.Debugf("SSH connector: form parameter %s present (JWT length: %d)", key, len(values[0]))
-		} else {
-			c.logger.Debugf("SSH connector: form parameter %s = %v", key, values)
-		}
+	// Handle both POST (form data) and GET (query param) for CLI compatibility
+	var sshJWT string
+	if r.Method == "POST" {
+		sshJWT = r.FormValue("ssh_jwt")
+	} else {
+		sshJWT = r.URL.Query().Get("ssh_jwt")
 	}
 	
-	// Get the SSH JWT from the request
-	sshJWT := r.FormValue("ssh_jwt")
 	if sshJWT == "" {
 		c.logger.Errorf("SSH connector: no SSH JWT provided in request")
 		return identity, errors.New("no SSH JWT provided")
@@ -114,6 +122,117 @@ func (c *SSHConnector) HandleCallback(scopes connector.Scopes, r *http.Request) 
 	
 	c.logger.Infof("SSH connector: authentication successful for user %s (%s)", identity.Username, identity.Email)
 	return identity, nil
+}
+
+// HandleDirectTokenRequest processes direct token requests from CLI tools.
+// This bypasses the OAuth2 redirect flow and returns tokens directly.
+func (c *SSHConnector) HandleDirectTokenRequest(w http.ResponseWriter, r *http.Request) {
+	c.logger.Infof("SSH connector: processing direct token request")
+	c.logger.Debugf("SSH connector: request method %s, URL %s", r.Method, r.URL.String())
+
+	// Parse request to get SSH JWT
+	var sshJWT string
+	if r.Method == "POST" {
+		if err := r.ParseForm(); err != nil {
+			c.logger.Errorf("SSH connector: failed to parse form: %v", err)
+			http.Error(w, "failed to parse form", http.StatusBadRequest)
+			return
+		}
+		sshJWT = r.FormValue("ssh_jwt")
+	} else {
+		sshJWT = r.URL.Query().Get("ssh_jwt")
+	}
+
+	if sshJWT == "" {
+		c.logger.Errorf("SSH connector: no SSH JWT provided in request")
+		http.Error(w, "no SSH JWT provided", http.StatusBadRequest)
+		return
+	}
+
+	// Validate SSH JWT and get identity
+	c.logger.Infof("SSH connector: validating SSH JWT for direct token exchange")
+	identity, err := c.validateSSHJWT(sshJWT)
+	if err != nil {
+		c.logger.Errorf("SSH connector: JWT validation failed: %v", err)
+		http.Error(w, fmt.Sprintf("SSH authentication failed: %v", err), http.StatusUnauthorized)
+		return
+	}
+
+	c.logger.Infof("SSH connector: SSH JWT validated successfully for user %s", identity.Username)
+
+	// Generate tokens directly
+	tokenResp, err := c.generateTokenResponse(identity)
+	if err != nil {
+		c.logger.Errorf("SSH connector: failed to generate tokens: %v", err)
+		http.Error(w, "failed to generate tokens", http.StatusInternalServerError)
+		return
+	}
+
+	// Return tokens as JSON
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(tokenResp); err != nil {
+		c.logger.Errorf("SSH connector: failed to encode token response: %v", err)
+		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		return
+	}
+
+	c.logger.Infof("SSH connector: successfully issued tokens for user %s", identity.Username)
+}
+
+// generateTokenResponse creates an OIDC token response for the authenticated user.
+func (c *SSHConnector) generateTokenResponse(identity connector.Identity) (*TokenResponse, error) {
+	c.logger.Debugf("SSH connector: generating token response for user %s", identity.Username)
+
+	// Create ID token claims
+	now := time.Now()
+	expiresIn := c.config.TokenTTL
+	if expiresIn == 0 {
+		expiresIn = 3600 // Default 1 hour
+	}
+
+	idTokenClaims := jwt.MapClaims{
+		"iss":              "http://localhost:5556/dex", // Should match issuer
+		"sub":              identity.UserID,
+		"aud":              "kubectl-ssh-oidc", // Client ID
+		"iat":              now.Unix(),
+		"exp":              now.Add(time.Duration(expiresIn) * time.Second).Unix(),
+		"email":            identity.Email,
+		"email_verified":   identity.EmailVerified,
+		"name":             identity.Username,
+		"preferred_username": identity.Username,
+		"groups":           identity.Groups,
+	}
+
+	// Sign ID token (using a simple signing key for demo - in production use proper key management)
+	idToken := jwt.NewWithClaims(jwt.SigningMethodHS256, idTokenClaims)
+	idTokenString, err := idToken.SignedString([]byte("demo-secret-key"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign ID token: %w", err)
+	}
+
+	// Create access token (simplified for demo)
+	accessTokenClaims := jwt.MapClaims{
+		"iss":    "http://localhost:5556/dex",
+		"sub":    identity.UserID,
+		"aud":    "kubectl-ssh-oidc",
+		"iat":    now.Unix(),
+		"exp":    now.Add(time.Duration(expiresIn) * time.Second).Unix(),
+		"email":  identity.Email,
+		"groups": identity.Groups,
+	}
+
+	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, accessTokenClaims)
+	accessTokenString, err := accessToken.SignedString([]byte("demo-secret-key"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign access token: %w", err)
+	}
+
+	return &TokenResponse{
+		AccessToken: accessTokenString,
+		TokenType:   "Bearer",
+		ExpiresIn:   expiresIn,
+		IDToken:     idTokenString,
+	}, nil
 }
 
 // validateSSHJWT validates an SSH-signed JWT and extracts user identity.

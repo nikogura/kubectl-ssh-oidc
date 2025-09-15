@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -51,8 +50,8 @@ func TestIntegrationSetup(t *testing.T) {
 	t.Logf("  Key 2: %s (fingerprint: %s)", key2Path, key2Fingerprint)
 	t.Logf("  Key 3: %s (fingerprint: %s)", key3Path, key3Fingerprint)
 
-	// Update Dex configuration with real fingerprints
-	updateDexConfig(t, key1Fingerprint, key2Fingerprint, key3Fingerprint)
+	// Set environment variables for Dex configuration
+	setDexEnvironment(key1Fingerprint, key2Fingerprint, key3Fingerprint)
 
 	// Start Docker Compose services
 	startServices(t)
@@ -127,24 +126,11 @@ func generateSSHKey(t *testing.T, testDir, keyName string) (string, string) {
 	return privateKeyPath, fingerprint
 }
 
-// updateDexConfig replaces placeholder fingerprints with real ones.
-func updateDexConfig(t *testing.T, fingerprint1, fingerprint2, fingerprint3 string) {
-	configPath := "dex-config.yaml"
-
-	content, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-
-	// Replace placeholders
-	configStr := string(content)
-	configStr = strings.ReplaceAll(configStr, "PLACEHOLDER_KEY_FINGERPRINT_1", fingerprint1)
-	configStr = strings.ReplaceAll(configStr, "PLACEHOLDER_KEY_FINGERPRINT_2", fingerprint2)
-	configStr = strings.ReplaceAll(configStr, "PLACEHOLDER_KEY_FINGERPRINT_3", fingerprint3)
-
-	// Write updated config
-	err = os.WriteFile(configPath, []byte(configStr), 0644)
-	require.NoError(t, err)
-
-	t.Logf("Updated Dex configuration with real SSH key fingerprints")
+// setDexEnvironment sets environment variables for Dex configuration.
+func setDexEnvironment(fingerprint1, fingerprint2, fingerprint3 string) {
+	os.Setenv("TEST_KEY_FINGERPRINT_1", fingerprint1)
+	os.Setenv("TEST_KEY_FINGERPRINT_2", fingerprint2)
+	os.Setenv("TEST_KEY_FINGERPRINT_3", fingerprint3)
 }
 
 // startServices starts the Docker Compose services.
@@ -153,6 +139,11 @@ func startServices(t *testing.T) {
 
 	cmd := exec.Command("docker-compose", "up", "-d", "--build")
 	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("TEST_KEY_FINGERPRINT_1=%s", os.Getenv("TEST_KEY_FINGERPRINT_1")),
+		fmt.Sprintf("TEST_KEY_FINGERPRINT_2=%s", os.Getenv("TEST_KEY_FINGERPRINT_2")),
+		fmt.Sprintf("TEST_KEY_FINGERPRINT_3=%s", os.Getenv("TEST_KEY_FINGERPRINT_3")),
+	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("Failed to start services: %v\nOutput: %s", err, output)
