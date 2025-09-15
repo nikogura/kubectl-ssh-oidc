@@ -570,7 +570,7 @@ func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) {
 
 	// Use SSH connector's custom token endpoint for JWT-based authentication
 	tokenURL := strings.TrimSuffix(config.DexURL, "/") + "/token"
-	
+
 	// Create form data for custom JWT grant
 	formData := url.Values{}
 	formData.Set("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer")
@@ -578,8 +578,8 @@ func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) {
 	formData.Set("client_id", config.ClientID)
 	formData.Set("scope", "openid email profile groups")
 
-	// Create HTTP request
-	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(formData.Encode()))
+	// Create HTTP request with context
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, tokenURL, strings.NewReader(formData.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create token request: %w", err)
 	}
@@ -613,7 +613,8 @@ func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) {
 			Error            string `json:"error"`
 			ErrorDescription string `json:"error_description"`
 		}
-		if jsonErr := json.Unmarshal(bodyBytes, &errorResp); jsonErr == nil {
+		jsonErr := json.Unmarshal(bodyBytes, &errorResp)
+		if jsonErr == nil {
 			return nil, fmt.Errorf("dex authentication failed (%d): %s - %s", resp.StatusCode, errorResp.Error, errorResp.ErrorDescription)
 		}
 		return nil, fmt.Errorf("dex authentication failed (%d): %s", resp.StatusCode, string(bodyBytes))
@@ -621,7 +622,8 @@ func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) {
 
 	// Parse successful token response
 	var tokenResp DexTokenResponse
-	if err := json.Unmarshal(bodyBytes, &tokenResp); err != nil {
+	err = json.Unmarshal(bodyBytes, &tokenResp)
+	if err != nil {
 		return nil, fmt.Errorf("failed to parse token response: %w", err)
 	}
 
