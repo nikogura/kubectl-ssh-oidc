@@ -17,7 +17,7 @@ RUN mkdir -p dex/connector/ssh
 # Copy SSH connector with Dex-compatible interface
 COPY docker/dex/ssh.go dex/connector/ssh/ssh.go
 
-# Add SSH connector import to Dex
+# Add SSH connector import to Dex (temporarily without server routing)
 RUN cd dex && \
     sed -i '/\"github.com\/dexidp\/dex\/connector\/oidc\"/a\\t\"github.com/dexidp/dex/connector/ssh\"' server/server.go && \
     sed -i '/\"oidc\":[[:space:]]*func()/a\\t\"ssh\":            func() ConnectorConfig { return new(ssh.Config) },' server/server.go

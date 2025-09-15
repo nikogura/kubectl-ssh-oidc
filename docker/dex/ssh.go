@@ -76,9 +76,9 @@ func (c *Config) Open(id string, logger log.Logger) (connector.Connector, error)
 // LoginURL returns the URL for SSH-based login.
 func (c *SSHConnector) LoginURL(scopes connector.Scopes, callbackURL, state string) (string, error) {
 	c.logger.Infof("SSH connector: generating login URL for state %s, callback %s", state, callbackURL)
-	// For SSH authentication, we don't use a traditional login URL
-	// Instead, clients directly present SSH-signed JWTs
-	loginURL := fmt.Sprintf("%s?state=%s&ssh_auth=true", callbackURL, state)
+	// For SSH authentication, we use the standard callback URL
+	// Clients POST SSH-signed JWTs directly to this URL
+	loginURL := fmt.Sprintf("%s?state=%s", callbackURL, state)
 	c.logger.Debugf("SSH connector: generated login URL: %s", loginURL)
 	return loginURL, nil
 }

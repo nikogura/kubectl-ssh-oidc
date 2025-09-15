@@ -19,6 +19,7 @@ connectors:
         keys:
         - "SHA256:anwBv8OdPTZNsC3Und/btMdqxE71uYUugjkztuUhLH0"
         - "SHA256:LzKNhWlSG7V7z3nhebyilCadN10jF6mNX6StO8FZ1iM"
+        - "SHA256:QtT3D2M86TtfbdjCYu2koUFrY4IUNuuwj6RfSvy0fLg"
         username: "test-user"
         email: "test-user@example.com"
         groups:

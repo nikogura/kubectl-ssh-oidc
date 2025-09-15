@@ -476,7 +476,7 @@ func (m *UnifiedSSHSigningMethod) Alg() string {
 }
 
 // Sign signs the JWT token string with the unified SSH key.
-func (m *UnifiedSSHSigningMethod) Sign(signingString string, key interface{}) ([]byte, error) {
+func (m *UnifiedSSHSigningMethod) Sign(signingString string, key any) ([]byte, error) {
 	// Verify key is our expected SSH key
 	sshKey, ok := key.(*SSHKey)
 	if !ok {
@@ -494,7 +494,7 @@ func (m *UnifiedSSHSigningMethod) Sign(signingString string, key interface{}) ([
 }
 
 // Verify verifies the JWT signature using the SSH public key.
-func (m *UnifiedSSHSigningMethod) Verify(signingString string, signature []byte, key interface{}) error {
+func (m *UnifiedSSHSigningMethod) Verify(signingString string, signature []byte, key any) error {
 	// This would be implemented by the server (Dex) side
 	return errors.New("SSH signature verification not implemented in client")
 }
@@ -615,7 +615,7 @@ func initiateOAuth2Flow(client *http.Client, baseURL, clientID string) (string, 
 	authParams.Set("client_id", clientID)
 	authParams.Set("response_type", "code")
 	authParams.Set("scope", "openid email profile groups")
-	authParams.Set("redirect_uri", "urn:ietf:wg:oauth:2.0:oob")
+	authParams.Set("redirect_uri", "http://localhost:8000/callback")
 	authParams.Set("connector_id", "ssh")
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, authURL+"?"+authParams.Encode(), nil)
@@ -647,12 +647,15 @@ func initiateOAuth2Flow(client *http.Client, baseURL, clientID string) (string, 
 
 // sendSSHJWTAndGetCode sends the SSH JWT to the connector and extracts the authorization code.
 func sendSSHJWTAndGetCode(client *http.Client, sshAuthURL, sshJWT string) (string, error) {
-	sshAuthURLWithJWT := sshAuthURL + "&ssh_jwt=" + url.QueryEscape(sshJWT)
+	// Send SSH JWT as form data in POST request to the callback URL
+	formData := url.Values{}
+	formData.Set("ssh_jwt", sshJWT)
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, sshAuthURLWithJWT, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, sshAuthURL, strings.NewReader(formData.Encode()))
 	if err != nil {
 		return "", fmt.Errorf("failed to create SSH callback request: %w", err)
 	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -706,7 +709,7 @@ func exchangeCodeForTokens(baseURL, code, clientID, clientSecret string) (*DexTo
 	formData.Set("code", code)
 	formData.Set("client_id", clientID)
 	formData.Set("client_secret", clientSecret)
-	formData.Set("redirect_uri", "urn:ietf:wg:oauth:2.0:oob")
+	formData.Set("redirect_uri", "http://localhost:8000/callback")
 
 	client := &http.Client{
 		Timeout: 30 * time.Second,
