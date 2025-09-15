@@ -4,12 +4,15 @@ import (
 	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	clientauthv1beta1 "k8s.io/client-go/pkg/apis/clientauthentication/v1beta1"
 )
 
 const (
@@ -227,6 +231,17 @@ func testSuccessfulAuthWithGoodUserKey(t *testing.T, _ string, keyPath, username
 	// Verify we got a token response
 	assert.Contains(t, outputStr, "token", "Expected to receive a token")
 
+	// Parse the kubectl exec credential response
+	var execCred clientauthv1beta1.ExecCredential
+	err = json.Unmarshal([]byte(outputStr), &execCred)
+	require.NoError(t, err, "Should be able to parse kubectl exec credential")
+
+	// Verify the token is present and valid
+	require.NotEmpty(t, execCred.Status.Token, "Should have a token in status")
+
+	// Validate JWT format and algorithm
+	validateJWTToken(t, execCred.Status.Token, username)
+
 	t.Log("✅ Successful authentication with good user/key verified!")
 }
 
@@ -343,4 +358,72 @@ func buildKubectlSSHOIDC(t *testing.T) string {
 	}
 
 	return binaryPath
+}
+
+// validateJWTToken validates that the token is a proper OIDC JWT with correct algorithm and claims.
+func validateJWTToken(t *testing.T, tokenString, expectedUsername string) {
+	// Parse JWT header without verification to check algorithm
+	parts := strings.Split(tokenString, ".")
+	require.Len(t, parts, 3, "JWT should have 3 parts separated by dots")
+
+	// Decode header
+	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
+	require.NoError(t, err, "Should be able to decode JWT header")
+
+	var header map[string]interface{}
+	err = json.Unmarshal(headerBytes, &header)
+	require.NoError(t, err, "Should be able to parse JWT header JSON")
+
+	// Verify algorithm is HMAC-SHA256 (not SSH)
+	alg, ok := header["alg"].(string)
+	require.True(t, ok, "JWT header should have string algorithm")
+	assert.Equal(t, "HS256", alg, "Token should use HS256 algorithm, not SSH")
+
+	// Verify token type
+	typ, ok := header["typ"].(string)
+	require.True(t, ok, "JWT header should have string type")
+	assert.Equal(t, "JWT", typ, "Token should be JWT type")
+
+	t.Logf("✅ JWT header validation passed - algorithm: %s, type: %s", alg, typ)
+
+	// Decode payload without verification to check claims
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	require.NoError(t, err, "Should be able to decode JWT payload")
+
+	var claims map[string]interface{}
+	err = json.Unmarshal(payloadBytes, &claims)
+	require.NoError(t, err, "Should be able to parse JWT payload JSON")
+
+	// Verify essential OIDC claims
+	sub, ok := claims["sub"].(string)
+	require.True(t, ok, "JWT should have string subject claim")
+	assert.Equal(t, expectedUsername, sub, "Subject should match expected username")
+
+	iss, ok := claims["iss"].(string)
+	require.True(t, ok, "JWT should have string issuer claim")
+	assert.Equal(t, "https://dex-alpha.corp.terrace.fi", iss, "Issuer should match Dex URL")
+
+	aud, ok := claims["aud"].([]interface{})
+	require.True(t, ok, "JWT should have audience claim as array")
+	require.Contains(t, aud, "kubernetes", "Audience should contain kubernetes")
+
+	exp, ok := claims["exp"].(float64)
+	require.True(t, ok, "JWT should have numeric expiration claim")
+	assert.Greater(t, exp, float64(time.Now().Unix()), "Token should not be expired")
+
+	iat, ok := claims["iat"].(float64)
+	require.True(t, ok, "JWT should have numeric issued at claim")
+	assert.LessOrEqual(t, iat, float64(time.Now().Unix()+60), "Token should have reasonable issued at time")
+
+	// Verify user-specific claims
+	email, ok := claims["email"].(string)
+	require.True(t, ok, "JWT should have string email claim")
+	assert.Equal(t, expectedUsername+"@example.com", email, "Email should match expected pattern")
+
+	groups, ok := claims["groups"].([]interface{})
+	require.True(t, ok, "JWT should have groups claim as array")
+	assert.Contains(t, groups, "developers", "Groups should contain developers")
+	assert.Contains(t, groups, "kubernetes-users", "Groups should contain kubernetes-users")
+
+	t.Logf("✅ JWT claims validation passed - sub: %s, iss: %s, email: %s, groups: %v", sub, iss, email, groups)
 }

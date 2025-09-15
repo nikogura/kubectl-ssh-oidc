@@ -31,7 +31,7 @@ func main() {
 		token = tokenResp.IDToken
 	}
 
-	// Output kubectl exec credential with token from Dex
+	// Output kubectl exec credential with server-generated OIDC token
 	credErr := kubectl.OutputExecCredential(token, tokenResp.ExpiresIn)
 	if credErr != nil {
 		fmt.Fprintf(os.Stderr, "Failed to output credential: %v\n", credErr)

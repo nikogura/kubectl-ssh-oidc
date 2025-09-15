@@ -476,18 +476,25 @@ func (c *SSHConnector) HandleDirectTokenRequest(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Generate OIDC token response
+	// Generate proper OIDC tokens using Dex's token generation
+	accessToken, idToken, err := c.generateOIDCTokens(identity)
+	if err != nil {
+		http.Error(w, "Failed to generate OIDC tokens", http.StatusInternalServerError)
+		return
+	}
+
+	// Return standard OIDC token response
 	tokenResponse := map[string]interface{}{
-		"access_token": "ssh-" + sshJWT, // Use SSH JWT as access token
+		"access_token": accessToken,
+		"id_token":     idToken,
 		"token_type":   "Bearer",
 		"expires_in":   c.config.TokenTTL,
-		"id_token":     sshJWT, // The SSH JWT serves as the ID token
 		"user_info": map[string]interface{}{
 			"sub":                identity.UserID,
 			"name":               identity.Username,
+			"preferred_username": identity.Username,
 			"email":              identity.Email,
 			"groups":             identity.Groups,
-			"preferred_username": identity.Username,
 		},
 	}
 
