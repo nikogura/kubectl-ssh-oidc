@@ -40,6 +40,7 @@ var (
 type Config struct {
 	DexURL         string   `json:"dex_url"`
 	ClientID       string   `json:"client_id"`
+	ClientSecret   string   `json:"client_secret"`
 	Audience       string   `json:"audience"`
 	CacheTokens    bool     `json:"cache_tokens"`
 	Username       string   `json:"username,omitempty"`
@@ -558,55 +559,177 @@ func (e *MultiKeyAuthError) Error() string {
 // ExchangeWithDex exchanges the SSH-signed JWT for an OIDC token from Dex.
 // Implements OAuth2 authorization code flow with SSH authentication.
 func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) {
-	// Validate JWT format
+	err := validateJWT(sshJWT)
+	if err != nil {
+		return nil, err
+	}
+
+	baseURL := strings.TrimSuffix(config.DexURL, "/")
+	client := createHTTPClient()
+
+	// Step 1: Initiate OAuth2 flow and get SSH connector URL
+	sshAuthURL, err := initiateOAuth2Flow(client, baseURL, config.ClientID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 2: Send SSH JWT to connector and get authorization code
+	code, err := sendSSHJWTAndGetCode(client, sshAuthURL, sshJWT)
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 3: Exchange authorization code for tokens
+	return exchangeCodeForTokens(baseURL, code, config.ClientID, config.ClientSecret)
+}
+
+// validateJWT validates the format of the SSH JWT.
+func validateJWT(sshJWT string) error {
 	if !strings.Contains(sshJWT, ".") {
-		return nil, errors.New("authentication failed: invalid JWT format")
+		return errors.New("authentication failed: invalid JWT format")
 	}
 
 	parts := strings.Split(sshJWT, ".")
 	if len(parts) != 3 {
-		return nil, errors.New("authentication failed: malformed JWT")
+		return errors.New("authentication failed: malformed JWT")
 	}
 
-	// Use SSH connector's custom token endpoint for JWT-based authentication
-	tokenURL := strings.TrimSuffix(config.DexURL, "/") + "/token"
+	return nil
+}
 
-	// Create form data for custom JWT grant
-	formData := url.Values{}
-	formData.Set("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer")
-	formData.Set("assertion", sshJWT)
-	formData.Set("client_id", config.ClientID)
-	formData.Set("scope", "openid email profile groups")
+// createHTTPClient creates an HTTP client configured for OAuth2 flow.
+func createHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Don't follow redirects - we need to handle them manually
+			return http.ErrUseLastResponse
+		},
+	}
+}
 
-	// Create HTTP request with context
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, tokenURL, strings.NewReader(formData.Encode()))
+// initiateOAuth2Flow starts the OAuth2 flow and returns the SSH connector URL.
+func initiateOAuth2Flow(client *http.Client, baseURL, clientID string) (string, error) {
+	authURL := baseURL + "/auth"
+	authParams := url.Values{}
+	authParams.Set("client_id", clientID)
+	authParams.Set("response_type", "code")
+	authParams.Set("scope", "openid email profile groups")
+	authParams.Set("redirect_uri", "urn:ietf:wg:oauth:2.0:oob")
+	authParams.Set("connector_id", "ssh")
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, authURL+"?"+authParams.Encode(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create token request: %w", err)
+		return "", fmt.Errorf("failed to create auth request: %w", err)
 	}
 
-	// Set headers
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to initiate OAuth2 flow: %w", err)
+	}
+	resp.Body.Close()
 
-	// Create HTTP client with timeout
+	if resp.StatusCode != http.StatusFound && resp.StatusCode != http.StatusSeeOther {
+		return "", fmt.Errorf("unexpected response from auth endpoint: %d", resp.StatusCode)
+	}
+
+	location := resp.Header.Get("Location")
+	if location == "" {
+		return "", errors.New("no redirect to SSH connector")
+	}
+
+	// Convert relative URL to absolute URL if needed
+	if strings.HasPrefix(location, "http") {
+		return location, nil
+	}
+	return baseURL + location, nil
+}
+
+// sendSSHJWTAndGetCode sends the SSH JWT to the connector and extracts the authorization code.
+func sendSSHJWTAndGetCode(client *http.Client, sshAuthURL, sshJWT string) (string, error) {
+	sshAuthURLWithJWT := sshAuthURL + "&ssh_jwt=" + url.QueryEscape(sshJWT)
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, sshAuthURLWithJWT, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create SSH callback request: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to send SSH JWT to callback: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Handle successful redirect with authorization code
+	if resp.StatusCode == http.StatusFound || resp.StatusCode == http.StatusSeeOther {
+		return extractAuthorizationCode(resp)
+	}
+
+	// Handle error response
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read callback response: %w", err)
+	}
+
+	return "", fmt.Errorf("SSH authentication failed (%d): %s", resp.StatusCode, string(bodyBytes))
+}
+
+// extractAuthorizationCode extracts the authorization code from the redirect response.
+func extractAuthorizationCode(resp *http.Response) (string, error) {
+	redirectLocation := resp.Header.Get("Location")
+	if redirectLocation == "" {
+		return "", errors.New("callback succeeded but no redirect location provided")
+	}
+
+	redirectURL, err := url.Parse(redirectLocation)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse redirect URL: %w", err)
+	}
+
+	code := redirectURL.Query().Get("code")
+	if code == "" {
+		if errorParam := redirectURL.Query().Get("error"); errorParam != "" {
+			return "", fmt.Errorf("authentication failed: %s", errorParam)
+		}
+		return "", errors.New("no authorization code in callback response")
+	}
+
+	return code, nil
+}
+
+// exchangeCodeForTokens exchanges an OAuth2 authorization code for tokens using the standard Dex token endpoint.
+func exchangeCodeForTokens(baseURL, code, clientID, clientSecret string) (*DexTokenResponse, error) {
+	tokenURL := baseURL + "/token"
+
+	formData := url.Values{}
+	formData.Set("grant_type", "authorization_code")
+	formData.Set("code", code)
+	formData.Set("client_id", clientID)
+	formData.Set("client_secret", clientSecret)
+	formData.Set("redirect_uri", "urn:ietf:wg:oauth:2.0:oob")
+
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 	}
 
-	// Make the request
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, tokenURL, strings.NewReader(formData.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to exchange token with Dex: %w", err)
+		return nil, fmt.Errorf("failed to exchange code for tokens: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Read response body
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read token response: %w", err)
 	}
 
-	// Check for HTTP errors
 	if resp.StatusCode != http.StatusOK {
 		// Try to parse error response
 		var errorResp struct {
@@ -615,12 +738,11 @@ func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) {
 		}
 		jsonErr := json.Unmarshal(bodyBytes, &errorResp)
 		if jsonErr == nil {
-			return nil, fmt.Errorf("dex authentication failed (%d): %s - %s", resp.StatusCode, errorResp.Error, errorResp.ErrorDescription)
+			return nil, fmt.Errorf("token exchange failed (%d): %s - %s", resp.StatusCode, errorResp.Error, errorResp.ErrorDescription)
 		}
-		return nil, fmt.Errorf("dex authentication failed (%d): %s", resp.StatusCode, string(bodyBytes))
+		return nil, fmt.Errorf("token exchange failed (%d): %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	// Parse successful token response
 	var tokenResp DexTokenResponse
 	err = json.Unmarshal(bodyBytes, &tokenResp)
 	if err != nil {
@@ -635,6 +757,7 @@ func LoadConfig() *Config {
 	config := &Config{
 		DexURL:         getEnvOrDefault("DEX_URL", "https://dex.example.com"),
 		ClientID:       getEnvOrDefault("CLIENT_ID", "kubectl-ssh-oidc"),
+		ClientSecret:   getEnvOrDefault("CLIENT_SECRET", ""),
 		Audience:       getEnvOrDefault("AUDIENCE", "kubernetes"),
 		CacheTokens:    getEnvOrDefault("CACHE_TOKENS", trueString) == trueString,
 		Username:       getEnvOrDefault("KUBECTL_SSH_USER", ""),
