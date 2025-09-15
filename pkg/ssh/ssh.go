@@ -599,7 +599,18 @@ func (c *SSHConnector) verifySignatureAndCreateIdentity(
 	// Verify signature against each authorized key until one succeeds
 	for _, authorizedKeyFingerprint := range userKeys {
 		if authorizedKeyFingerprint == keyFingerprint {
-			verifyErr := c.verifySSHSignature(signingString, sshSignatureB64, "ssh-ed25519", publicKeyB64)
+			// Parse the public key to determine its type
+			publicKeyBytes, keyDecodeErr := base64.StdEncoding.DecodeString(publicKeyB64)
+			if keyDecodeErr != nil {
+				return connector.Identity{}, fmt.Errorf("failed to decode public key: %w", keyDecodeErr)
+			}
+			publicKey, parseErr := ssh.ParsePublicKey(publicKeyBytes)
+			if parseErr != nil {
+				return connector.Identity{}, fmt.Errorf("failed to parse public key: %w", parseErr)
+			}
+
+			// Use the actual key type as the signature format
+			verifyErr := c.verifySSHSignature(signingString, sshSignatureB64, publicKey.Type(), publicKeyB64)
 			if verifyErr == nil {
 				return connector.Identity{
 					UserID:        userInfo.Username,
