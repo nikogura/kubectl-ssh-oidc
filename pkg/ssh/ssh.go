@@ -13,6 +13,7 @@ import (
 	"github.com/dexidp/dex/connector"
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/ssh"
+	"gopkg.in/square/go-jose.v2"
 )
 
 // Config holds the configuration for the SSH connector.
@@ -466,6 +467,13 @@ func (c *SSHConnector) SetSigningKeyFromInterface(key interface{}) error {
 	case *rsa.PrivateKey:
 		c.signingKey = k
 		return nil
+	case *jose.JSONWebKey:
+		// Extract RSA private key from JOSE key
+		if rsaKey, ok := k.Key.(*rsa.PrivateKey); ok {
+			c.signingKey = rsaKey
+			return nil
+		}
+		return fmt.Errorf("JSONWebKey does not contain RSA private key, got: %T", k.Key)
 	default:
 		return fmt.Errorf("unsupported key type: %T", key)
 	}

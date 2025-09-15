@@ -1,6 +1,8 @@
 package ssh
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +12,7 @@ import (
 	"github.com/dexidp/dex/connector"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/square/go-jose.v2"
 
 	"github.com/nikogura/kubectl-ssh-oidc/testdata"
 )
@@ -652,3 +655,52 @@ func createValidSSHJWT(t *testing.T, signer ssh.Signer, pubKeyBytes []byte, fing
 	return sshJWTString
 }
 */
+
+func TestSSHConnector_SetSigningKeyFromInterface(t *testing.T) {
+	config := &Config{}
+	conn, err := config.Open("test", nil)
+	require.NoError(t, err)
+	sshConnector := conn.(*SSHConnector)
+
+	t.Run("rsa_private_key", func(t *testing.T) {
+		// Test with direct RSA private key
+		rsaKey, keyErr := rsa.GenerateKey(rand.Reader, 2048)
+		require.NoError(t, keyErr)
+
+		setErr := sshConnector.SetSigningKeyFromInterface(rsaKey)
+		require.NoError(t, setErr)
+		assert.Equal(t, rsaKey, sshConnector.signingKey)
+	})
+
+	t.Run("jose_json_web_key", func(t *testing.T) {
+		// Test with JOSE JSONWebKey containing RSA key
+		rsaKey, keyErr := rsa.GenerateKey(rand.Reader, 2048)
+		require.NoError(t, keyErr)
+
+		joseKey := &jose.JSONWebKey{
+			Key: rsaKey,
+		}
+
+		setErr := sshConnector.SetSigningKeyFromInterface(joseKey)
+		require.NoError(t, setErr)
+		assert.Equal(t, rsaKey, sshConnector.signingKey)
+	})
+
+	t.Run("jose_with_unsupported_key", func(t *testing.T) {
+		// Test with JOSE JSONWebKey containing non-RSA key
+		joseKey := &jose.JSONWebKey{
+			Key: "not-an-rsa-key",
+		}
+
+		setErr := sshConnector.SetSigningKeyFromInterface(joseKey)
+		require.Error(t, setErr)
+		assert.Contains(t, setErr.Error(), "JSONWebKey does not contain RSA private key")
+	})
+
+	t.Run("unsupported_type", func(t *testing.T) {
+		// Test with unsupported key type
+		setErr := sshConnector.SetSigningKeyFromInterface("unsupported-type")
+		require.Error(t, setErr)
+		assert.Contains(t, setErr.Error(), "unsupported key type: string")
+	})
+}

@@ -49,7 +49,26 @@ func (s *Server) handleSSHDirectToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if sshConn, ok := conn.Connector.(interface{ HandleDirectTokenRequest(http.ResponseWriter, *http.Request) }); ok {
+	// Provide Dex's signing key to the SSH connector
+	if sshConn, ok := conn.Connector.(interface{ 
+		HandleDirectTokenRequest(http.ResponseWriter, *http.Request)
+		SetSigningKeyFromInterface(interface{}) error
+	}); ok {
+		// Get Dex's current signing key
+		keySet, keySetErr := s.storage.GetKeys()
+		if keySetErr != nil {
+			s.logger.Errorf("Failed to get signing keys: %v", keySetErr)
+			http.Error(w, "Failed to get signing keys", http.StatusInternalServerError)
+			return
+		}
+
+		// Set the signing key in the SSH connector
+		if keyErr := sshConn.SetSigningKeyFromInterface(keySet.SigningKey); keyErr != nil {
+			s.logger.Errorf("Failed to set signing key: %v", keyErr)
+			http.Error(w, "Failed to configure signing key", http.StatusInternalServerError)
+			return
+		}
+
 		sshConn.HandleDirectTokenRequest(w, r)
 	} else {
 		s.logger.Errorf("SSH connector doesn't implement HandleDirectTokenRequest")
@@ -58,9 +77,13 @@ func (s *Server) handleSSHDirectToken(w http.ResponseWriter, r *http.Request) {
 }
 EOF
 
+# Add JOSE dependency for SSH connector
+RUN cd dex && \
+    go mod edit -require gopkg.in/square/go-jose.v2@v2.6.0 && \
+    go mod tidy
+
 # Build Dex with SSH connector
 RUN cd dex && \
-    go mod tidy && \
     CGO_ENABLED=1 make build
 
 # Runtime image
