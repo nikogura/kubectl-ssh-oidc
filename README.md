@@ -158,20 +158,34 @@ ssh-keygen -lf /path/to/your/key.pub
 make ssh-fingerprints
 ```
 
-### 3. Configure Dex
+### 3. Generate Client Credentials
 
-Create or update your Dex configuration (use the fingerprints from step 2):
+Generate secure client credentials for the Dex static client:
+
+```bash
+# Generate a secure client ID (32 character hex string)
+openssl rand -hex 16
+
+# Generate a secure client secret (base64 encoded)
+openssl rand -base64 32
+```
+
+### 4. Configure Dex
+
+Create or update your Dex configuration (use the fingerprints from step 2 and credentials from step 3):
 
 ```yaml
 # dex-config.yaml
 issuer: https://dex.example.com
 
 staticClients:
-- id: kubectl-ssh-oidc
+- id: your-generated-client-id        # Generate secure random client ID
   redirectURIs:
   - 'urn:ietf:wg:oauth:2.0:oob'
+  - 'http://localhost:8080'
+  - 'http://localhost:18000'
   name: 'kubectl SSH OIDC Plugin'
-  secret: kubectl-ssh-oidc-secret
+  secret: your-generated-client-secret # Generate secure random client secret
 
 connectors:
 - type: ssh
@@ -221,7 +235,7 @@ connectors:
     token_ttl: 3600
 ```
 
-### 4. Deploy Custom Dex with SSH Connector
+### 5. Deploy Custom Dex with SSH Connector
 
 The SSH connector is included in this repository in the `pkg/ssh` package and acts as a Dex connector. The integration has been tested and validated with Dex v2.39.1. To use it:
 
@@ -241,7 +255,7 @@ cp -r /path/to/kubectl-ssh-oidc/pkg/ssh ./connector/ssh
 make build
 ```
 
-### 5. Configure Kubernetes Cluster
+### 6. Configure Kubernetes Cluster
 
 Update your kube-apiserver to accept OIDC tokens:
 
@@ -255,9 +269,9 @@ apiServer:
     oidc-groups-claim: "groups"
 ```
 
-### 6. Configure kubectl
+### 7. Configure kubectl
 
-Update your kubeconfig:
+Update your kubeconfig with environment variables for secure credential management:
 
 ```yaml
 apiVersion: v1
@@ -268,15 +282,15 @@ users:
     exec:
       apiVersion: client.authentication.k8s.io/v1beta1
       command: kubectl-ssh-oidc
-      args:
-      - "https://dex.example.com"        # Dex URL
-      - "kubectl-ssh-oidc"              # Client ID  
-      - "your-username"                 # Username for JWT sub claim
       env:
       - name: DEX_URL
         value: "https://dex.example.com"
+      - name: CLIENT_ID
+        value: "your-client-id"         # Generated client ID from Dex config
+      - name: CLIENT_SECRET
+        value: "your-client-secret"     # Generated client secret from Dex config
       - name: KUBECTL_SSH_USER
-        value: "your-username"          # Alternative to 3rd arg
+        value: "your-username"
 
 contexts:
 - name: ssh-oidc-context
@@ -323,14 +337,15 @@ kubectl logs deployment/my-app
 ```bash
 # Authentication settings
 export DEX_URL="https://dex.example.com"
-export CLIENT_ID="kubectl-ssh-oidc"
+export CLIENT_ID="your-generated-client-id"    # From Dex staticClients configuration
+export CLIENT_SECRET="your-client-secret"      # From Dex staticClients configuration  
 export AUDIENCE="kubernetes"
 export CACHE_TOKENS="true"
-export KUBECTL_SSH_USER="your-username"  # Username for authentication
+export KUBECTL_SSH_USER="your-username"        # Username for authentication
 
 # SSH behavior control
-export SSH_USE_AGENT="true"              # Use SSH agent (default: true)
-export SSH_IDENTITIES_ONLY="false"       # Only use specified keys (default: false)
+export SSH_USE_AGENT="true"                    # Use SSH agent (default: true)
+export SSH_IDENTITIES_ONLY="false"             # Only use specified keys (default: false)
 export SSH_KEY_PATHS="/path/to/key1:/path/to/key2"  # Custom SSH key paths
 ```
 
