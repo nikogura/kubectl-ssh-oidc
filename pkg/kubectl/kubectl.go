@@ -8,7 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -555,46 +558,74 @@ func (e *MultiKeyAuthError) Error() string {
 // ExchangeWithDex exchanges the SSH-signed JWT for an OIDC token from Dex.
 // Implements OAuth2 authorization code flow with SSH authentication.
 func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) {
-	// For this integration test, we'll simulate a successful authentication
-	// by validating the SSH JWT ourselves and returning a mock token response
-	// In production, this would go through the full OAuth2 flow
-
-	// Extract claims from SSH JWT to validate it's properly formed
+	// Validate JWT format
 	if !strings.Contains(sshJWT, ".") {
 		return nil, errors.New("authentication failed: invalid JWT format")
 	}
 
-	// Check if JWT contains expected claims structure
 	parts := strings.Split(sshJWT, ".")
 	if len(parts) != 3 {
 		return nil, errors.New("authentication failed: malformed JWT")
 	}
 
-	// For integration testing, simulate authentication based on username and configuration
-	// This allows us to test different scenarios by checking the KUBECTL_SSH_USER environment
+	// Use SSH connector's custom token endpoint for JWT-based authentication
+	tokenURL := strings.TrimSuffix(config.DexURL, "/") + "/token"
+	
+	// Create form data for custom JWT grant
+	formData := url.Values{}
+	formData.Set("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer")
+	formData.Set("assertion", sshJWT)
+	formData.Set("client_id", config.ClientID)
+	formData.Set("scope", "openid email profile groups")
 
-	username := config.Username
-
-	// Simulate authentication failures for test scenarios
-	if username == "nonexistent-user" {
-		return nil, errors.New("authentication failed: user not found")
+	// Create HTTP request
+	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(formData.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create token request: %w", err)
 	}
 
-	// For "test-user" with unauthorized keys (generated in test), simulate key validation failure
-	if username == "test-user" {
-		// Check if this is using an unauthorized key by looking for "unauthorized_key" in key paths
-		if keyPaths := os.Getenv("SSH_KEY_PATHS"); strings.Contains(keyPaths, "unauthorized_key") {
-			return nil, errors.New("authentication failed: key not authorized for user")
+	// Set headers
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	// Create HTTP client with timeout
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	// Make the request
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to exchange token with Dex: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Read response body
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read token response: %w", err)
+	}
+
+	// Check for HTTP errors
+	if resp.StatusCode != http.StatusOK {
+		// Try to parse error response
+		var errorResp struct {
+			Error            string `json:"error"`
+			ErrorDescription string `json:"error_description"`
 		}
+		if jsonErr := json.Unmarshal(bodyBytes, &errorResp); jsonErr == nil {
+			return nil, fmt.Errorf("dex authentication failed (%d): %s - %s", resp.StatusCode, errorResp.Error, errorResp.ErrorDescription)
+		}
+		return nil, fmt.Errorf("dex authentication failed (%d): %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	// Create mock successful response for valid test scenarios
-	return &DexTokenResponse{
-		AccessToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test-access-token",
-		TokenType:   "Bearer",
-		ExpiresIn:   3600,
-		IDToken:     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test-id-token",
-	}, nil
+	// Parse successful token response
+	var tokenResp DexTokenResponse
+	if err := json.Unmarshal(bodyBytes, &tokenResp); err != nil {
+		return nil, fmt.Errorf("failed to parse token response: %w", err)
+	}
+
+	return &tokenResp, nil
 }
 
 // LoadConfig loads configuration from environment or default values.
