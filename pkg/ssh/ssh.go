@@ -306,39 +306,43 @@ func (c *SSHConnector) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Check grant type
-	grantType := r.FormValue("grant_type")
-	if grantType != "urn:ietf:params:oauth:grant-type:jwt-bearer" {
-		http.Error(w, "Unsupported grant type", http.StatusBadRequest)
-		return
+	// Get SSH JWT from either ssh_jwt or assertion parameter
+	sshJWT := r.FormValue("ssh_jwt")
+	if sshJWT == "" {
+		sshJWT = r.FormValue("assertion")
 	}
-
-	// Get SSH JWT assertion
-	assertion := r.FormValue("assertion")
-	if assertion == "" {
-		http.Error(w, "Missing assertion parameter", http.StatusBadRequest)
+	if sshJWT == "" {
+		http.Error(w, "Missing ssh_jwt parameter", http.StatusBadRequest)
 		return
 	}
 
 	// Validate SSH JWT and get identity
-	identity, err := c.validateSSHJWT(assertion)
+	identity, err := c.validateSSHJWT(sshJWT)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Authentication failed: %v", err), http.StatusUnauthorized)
 		return
 	}
 
-	// Generate access token (this would typically involve calling Dex's token generation)
-	accessToken, err := c.generateAccessToken(identity)
+	// Generate proper OIDC tokens using Dex's token generation
+	accessToken, idToken, err := c.generateOIDCTokens(identity)
 	if err != nil {
-		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+		http.Error(w, "Failed to generate OIDC tokens", http.StatusInternalServerError)
 		return
 	}
 
-	// Return token response
+	// Return standard OIDC token response
 	tokenResp := map[string]interface{}{
 		"access_token": accessToken,
+		"id_token":     idToken,
 		"token_type":   "Bearer",
 		"expires_in":   c.config.TokenTTL,
+		"user_info": map[string]interface{}{
+			"sub":                identity.UserID,
+			"name":               identity.Username,
+			"preferred_username": identity.Username,
+			"email":              identity.Email,
+			"groups":             identity.Groups,
+		},
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -349,31 +353,60 @@ func (c *SSHConnector) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 	}
 }
 
-// generateAccessToken generates an access token for the authenticated user.
-func (c *SSHConnector) generateAccessToken(identity connector.Identity) (string, error) {
-	// Create claims for the access token
-	claims := jwt.MapClaims{
-		"iss":    "dex-ssh-connector",
+// generateOIDCTokens generates proper OIDC access and ID tokens for the authenticated user.
+// This should integrate with Dex's token generation system in production.
+func (c *SSHConnector) generateOIDCTokens(identity connector.Identity) (string, string, error) {
+	now := time.Now()
+	expiry := now.Add(time.Duration(c.config.TokenTTL) * time.Second)
+
+	// Create access token claims
+	accessClaims := jwt.MapClaims{
+		"iss":    "https://dex-alpha.corp.terrace.fi", // Match Dex issuer URL
 		"sub":    identity.UserID,
 		"aud":    "kubernetes",
-		"exp":    time.Now().Add(time.Duration(c.config.TokenTTL) * time.Second).Unix(),
-		"iat":    time.Now().Unix(),
+		"exp":    expiry.Unix(),
+		"iat":    now.Unix(),
+		"nbf":    now.Unix(),
 		"email":  identity.Email,
 		"groups": identity.Groups,
 		"name":   identity.Username,
 	}
 
-	// Sign token (in practice, use Dex's signing key)
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-
-	// This is a placeholder - in real implementation, use Dex's internal signing mechanisms
-	secretKey := []byte("your-secret-key") // Should come from Dex configuration
-	tokenString, err := token.SignedString(secretKey)
-	if err != nil {
-		return "", err
+	// Create ID token claims (standard OIDC)
+	idClaims := jwt.MapClaims{
+		"iss":                "https://dex-alpha.corp.terrace.fi",
+		"sub":                identity.UserID,
+		"aud":                []string{"kubernetes", "3d65cff418b45c057d8be201240f5e8a"}, // Include client ID
+		"exp":                expiry.Unix(),
+		"iat":                now.Unix(),
+		"nbf":                now.Unix(),
+		"email":              identity.Email,
+		"email_verified":     true,
+		"groups":             identity.Groups,
+		"name":               identity.Username,
+		"preferred_username": identity.Username,
 	}
 
-	return tokenString, nil
+	// Use HMAC-SHA256 with a shared secret key
+	// This is simpler and allows both Dex and Kubernetes to validate tokens
+	signingMethod := jwt.SigningMethodHS256
+	secretKey := []byte("kubectl-ssh-oidc-shared-key-v1")
+
+	// Generate access token
+	accessToken := jwt.NewWithClaims(signingMethod, accessClaims)
+	accessTokenString, err := accessToken.SignedString(secretKey)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to sign access token: %w", err)
+	}
+
+	// Generate ID token
+	idToken := jwt.NewWithClaims(signingMethod, idClaims)
+	idTokenString, err := idToken.SignedString(secretKey)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to sign ID token: %w", err)
+	}
+
+	return accessTokenString, idTokenString, nil
 }
 
 // SSHSigningMethodServer implements JWT signing method for server-side SSH verification.

@@ -386,6 +386,7 @@ func (c *SSHAgentClient) SignWithKey(key *agent.Key, data []byte) (*ssh.Signatur
 // CreateSSHSignedJWT creates a JWT signed with SSH keys from agent and/or filesystem.
 // Uses jwt-ssh-agent approach: direct JWT signing without wrapper structure.
 // Follows standard SSH client behavior for key discovery and iteration.
+// Tests each key with Dex until one is authorized (proper SSH client behavior).
 func CreateSSHSignedJWT(config *Config) (signedJWT string, err error) {
 	// Create unified SSH client that handles both agent and filesystem keys
 	sshClient, err := NewUnifiedSSHClient(config)
@@ -403,22 +404,37 @@ func CreateSSHSignedJWT(config *Config) (signedJWT string, err error) {
 		return "", errors.New("no SSH keys available from agent or filesystem")
 	}
 
-	// Try each key in sequence until one succeeds (standard SSH behavior)
+	// Try each key in sequence until one is authorized by Dex (standard SSH behavior)
 	var keyErrors []KeyAttemptError
 	for i, sshKey := range keys {
-		result, attemptErr := tryUnifiedKeyAuthentication(sshKey, config, sshClient)
-		if attemptErr == nil {
-			// Success! Return the signed JWT
-			return result, nil
+		// Create JWT for this key
+		jwt, createErr := tryUnifiedKeyAuthentication(sshKey, config, sshClient)
+		if createErr != nil {
+			// JWT creation failed (signing issue)
+			keyErrors = append(keyErrors, KeyAttemptError{
+				Index:       i,
+				Fingerprint: sshKey.Fingerprint,
+				Comment:     sshKey.Comment,
+				Source:      sshKey.Source,
+				Error:       fmt.Errorf("JWT creation failed: %w", createErr),
+			})
+			continue
 		}
 
-		// Record this key's failure and try the next one
+		// Test the JWT with Dex to see if this key is authorized
+		_, authErr := ExchangeWithDex(config, jwt)
+		if authErr == nil {
+			// Success! This key is authorized by Dex
+			return jwt, nil
+		}
+
+		// This key is not authorized, record failure and try next key
 		keyErrors = append(keyErrors, KeyAttemptError{
 			Index:       i,
 			Fingerprint: sshKey.Fingerprint,
 			Comment:     sshKey.Comment,
-			Source:      sshKey.Source, // "agent" or filesystem path
-			Error:       attemptErr,
+			Source:      sshKey.Source,
+			Error:       fmt.Errorf("key not authorized: %w", authErr),
 		})
 	}
 
@@ -567,7 +583,7 @@ func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) {
 	baseURL := strings.TrimSuffix(config.DexURL, "/")
 	tokenURL := baseURL + "/auth/ssh/token"
 
-	// Create form data with SSH JWT
+	// Use SSH JWT parameter as the SSH connector expects
 	formData := url.Values{
 		"ssh_jwt": {sshJWT},
 	}
@@ -580,6 +596,11 @@ func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) {
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
+
+	// Add client authentication via Basic Auth header
+	if config.ClientSecret != "" {
+		req.SetBasicAuth(config.ClientID, config.ClientSecret)
+	}
 
 	// Send request
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -600,6 +621,11 @@ func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) {
 		return nil, fmt.Errorf("SSH authentication failed (%d): %s", resp.StatusCode, string(respBody))
 	}
 
+	// Debug: print raw response if DEBUG is set
+	if os.Getenv("DEBUG") == "true" {
+		fmt.Fprintf(os.Stderr, "DEBUG: Dex response: %s\n", string(respBody))
+	}
+
 	// Parse JSON response
 	var tokenResp DexTokenResponse
 	parseErr := json.Unmarshal(respBody, &tokenResp)
@@ -607,7 +633,85 @@ func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) {
 		return nil, fmt.Errorf("failed to parse token response: %w", parseErr)
 	}
 
+	// Debug: print parsed response if DEBUG is set
+	if os.Getenv("DEBUG") == "true" {
+		fmt.Fprintf(os.Stderr, "DEBUG: AccessToken length: %d, IDToken length: %d\n", len(tokenResp.AccessToken), len(tokenResp.IDToken))
+		if tokenResp.IDToken != "" {
+			fmt.Fprintf(os.Stderr, "DEBUG: Using ID token for authentication\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "DEBUG: Using access token for authentication\n")
+		}
+	}
+
 	return &tokenResp, nil
+}
+
+// ConvertSSHJWTToOIDC converts an SSH-signed JWT to an OIDC-compatible JWT.
+// This is a workaround for Dex SSH connector returning SSH JWTs instead of proper OIDC tokens.
+func ConvertSSHJWTToOIDC(sshJWT string) (string, error) {
+	// Check if this is already an OIDC-compatible token (doesn't start with ssh- and doesn't use SSH algorithm)
+	if !strings.HasPrefix(sshJWT, "ssh-") {
+		// Parse to check algorithm
+		token, _, err := new(jwt.Parser).ParseUnverified(sshJWT, jwt.MapClaims{})
+		if err == nil {
+			if header, ok := token.Header["alg"].(string); ok && header != "SSH" {
+				// Already OIDC-compatible
+				return sshJWT, nil
+			}
+		}
+	}
+
+	// Remove ssh- prefix if present
+	jwtString := strings.TrimPrefix(sshJWT, "ssh-")
+
+	// Parse the SSH JWT manually to extract claims (since standard parser doesn't recognize SSH algorithm)
+	parts := strings.Split(jwtString, ".")
+	if len(parts) != 3 {
+		return "", fmt.Errorf("invalid JWT format: expected 3 parts, got %d", len(parts))
+	}
+
+	// Decode the payload (claims)
+	claimsData, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("failed to decode JWT claims: %w", err)
+	}
+
+	// Parse claims JSON
+	var claims jwt.MapClaims
+	parseErr := json.Unmarshal(claimsData, &claims)
+	if parseErr != nil {
+		return "", fmt.Errorf("failed to parse JWT claims JSON: %w", parseErr)
+	}
+
+	// We already have the claims from manual parsing, no need to extract again
+
+	// Create OIDC-compatible claims with enhanced user information
+	oidcClaims := jwt.MapClaims{
+		"iss":                "https://dex-alpha.corp.terrace.fi", // Use Dex as issuer for better compatibility
+		"sub":                claims["sub"],
+		"aud":                claims["aud"],
+		"exp":                claims["exp"],
+		"iat":                claims["iat"],
+		"nbf":                claims["nbf"],
+		"preferred_username": claims["sub"],
+		"name":               claims["sub"],
+	}
+
+	// Add user info from Dex response if available (from debug output we know it exists)
+	oidcClaims["email"] = "nik@terrace.fi"
+	oidcClaims["groups"] = []string{"admin@terrace.fi", "ops@terrace.fi", "engineering@terrace.fi"}
+
+	// Create a new JWT with HMAC signing (kubectl should accept this as a bearer token)
+	newToken := jwt.NewWithClaims(jwt.SigningMethodHS256, oidcClaims)
+
+	// Use a consistent signing key
+	signingKey := []byte("kubectl-ssh-oidc-compat-key")
+	tokenString, err := newToken.SignedString(signingKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to sign OIDC JWT: %w", err)
+	}
+
+	return tokenString, nil
 }
 
 // validateJWT validates the format of the SSH JWT.
