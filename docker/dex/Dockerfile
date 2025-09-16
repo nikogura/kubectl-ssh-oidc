@@ -63,8 +63,19 @@ func (s *Server) handleSSHDirectToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// DEBUG: Log all available keys to understand Dex's key structure
+		s.logger.Infof("DEBUG: Dex keySet.SigningKey type: %T", keySet.SigningKey)
+		s.logger.Infof("DEBUG: Dex SigningKey ID: %s", keySet.SigningKey.KeyID)
+		s.logger.Infof("DEBUG: Dex has %d verification keys", len(keySet.VerificationKeys))
+		for i, vk := range keySet.VerificationKeys {
+			s.logger.Infof("DEBUG: VerificationKey[%d] type: %T", i, vk.PublicKey)
+		}
+
+		// For now, use the existing SigningKey (we'll investigate why it has wrong KeyID)
+		signingKey := keySet.SigningKey
+
 		// Set the signing key in the SSH connector
-		if keyErr := sshConn.SetSigningKeyFromInterface(keySet.SigningKey); keyErr != nil {
+		if keyErr := sshConn.SetSigningKeyFromInterface(signingKey); keyErr != nil {
 			s.logger.Errorf("Failed to set signing key: %v", keyErr)
 			http.Error(w, "Failed to configure signing key", http.StatusInternalServerError)
 			return
