@@ -450,8 +450,13 @@ func (c *SSHConnector) generateRSASignedTokens(identity connector.Identity) (str
 // This MUST use the same key that Dex uses for standard OIDC tokens.
 func (c *SSHConnector) getSigningKey() (*rsa.PrivateKey, error) {
 	if c.signingKey != nil {
+		// DEBUG: Log that we're using Dex's signing key
+		fmt.Printf("DEBUG: SSH connector using Dex signing key (keyID: %s)\n", c.keyID)
 		return c.signingKey, nil
 	}
+
+	// DEBUG: Log that no signing key is available
+	fmt.Printf("DEBUG: SSH connector has no signing key - SetSigningKeyFromInterface was never called\n")
 
 	// No fallback key generation - we must use Dex's actual signing key
 	return nil, errors.New("no signing key available: SSH connector must receive Dex's signing key via SetSigningKeyFromInterface")
@@ -466,17 +471,22 @@ func (c *SSHConnector) SetSigningKey(key *rsa.PrivateKey) {
 // SetSigningKeyFromInterface allows external code to set the signing key from any private key interface.
 // This is useful when Dex provides keys in different formats.
 func (c *SSHConnector) SetSigningKeyFromInterface(key interface{}) error {
+	// DEBUG: Log that SetSigningKeyFromInterface is being called
+	fmt.Printf("DEBUG: SSH connector SetSigningKeyFromInterface called with key type: %T\n", key)
+
 	switch k := key.(type) {
 	case *rsa.PrivateKey:
 		c.signingKey = k
 		// No key ID available for raw RSA keys
 		c.keyID = ""
+		fmt.Printf("DEBUG: SSH connector set raw RSA private key (no keyID)\n")
 		return nil
 	case *jose.JSONWebKey:
 		// Extract RSA private key from JOSE key
 		if rsaKey, ok := k.Key.(*rsa.PrivateKey); ok {
 			c.signingKey = rsaKey
 			c.keyID = k.KeyID // Store the key ID for JWT headers
+			fmt.Printf("DEBUG: SSH connector set JOSE key with keyID: %s\n", c.keyID)
 			return nil
 		}
 		return fmt.Errorf("JSONWebKey does not contain RSA private key, got: %T", k.Key)
