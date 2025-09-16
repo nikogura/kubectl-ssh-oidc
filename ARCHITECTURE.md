@@ -625,6 +625,91 @@ connectors:
 - **Authorization Bypass**: Explicit fingerprint-to-user mapping required
 - **Token Forgery**: SSH signature requirement prevents token creation
 
+## 🔄 Multiple Token Authentication System
+
+### Overview
+
+The multiple token authentication system solves JWT validation failures that occur when Dex signing keys don't match Kubernetes API server expectations. Instead of returning a single token that may fail validation, the system generates multiple tokens using all available signing keys, allowing the client to select the token that works with the target Kubernetes cluster.
+
+### Problem Solved
+
+- **Signing Key Mismatch**: Kubernetes API servers expect tokens signed with specific keys (identified by Key ID)
+- **Key Rotation Issues**: During key rotation periods, old tokens become invalid
+- **Multi-Cluster Environments**: Different clusters may expect different signing keys
+
+### Implementation
+
+#### Server-Side (Dex SSH Connector)
+**File:** `pkg/ssh/ssh.go:350-420`
+
+1. **Generate Multiple Tokens**: The `generateAllTokenOptions()` function creates tokens using all available RSA signing keys
+2. **Token Response Structure**: Returns both single token (backward compatibility) and array of token options
+3. **Client ID Security**: Validates client ID against configured `allowed_clients` list
+
+```go
+type TokenOption struct {
+    AccessToken string `json:"access_token"`
+    IDToken     string `json:"id_token"`
+    KeyID       string `json:"kid"`
+}
+
+type DexTokenResponse struct {
+    AccessToken  string        `json:"access_token"`
+    IDToken      string        `json:"id_token"`
+    // ... other fields
+    Tokens       []TokenOption `json:"tokens,omitempty"`
+}
+```
+
+#### Client-Side (kubectl plugin)
+**File:** `pkg/kubectl/kubectl.go:580-650`
+
+1. **Token Selection**: The `selectBestToken()` function prefers tokens with Key IDs that match expected patterns
+2. **Fallback Logic**: Falls back to primary token if no suitable token option found
+3. **Backward Compatibility**: Maintains compatibility with non-multiple-token Dex instances
+
+```go
+func selectBestToken(tokenResp *DexTokenResponse) (*TokenOption, error) {
+    // Prefer tokens with key IDs (more likely to validate with K8s)
+    for _, token := range tokenResp.Tokens {
+        if token.KeyID != "" {
+            return &token, nil
+        }
+    }
+    // Fallback to primary token for backward compatibility
+    return &TokenOption{
+        AccessToken: tokenResp.AccessToken,
+        IDToken:     tokenResp.IDToken,
+    }, nil
+}
+```
+
+### Configuration
+
+#### SSH Connector Configuration
+Add client ID validation to prevent client spoofing:
+
+```yaml
+connectors:
+- type: ssh
+  id: ssh
+  name: SSH Key Authentication
+  config:
+    users:
+      # ... user configurations
+    allowed_clients:
+    - "your-kubernetes-client-id"    # Must match API server oidc-client-id
+    - "kubectl-ssh-oidc-client-id"   # Additional client IDs as needed
+```
+
+### Benefits
+
+1. **Reliability**: Eliminates JWT validation failures due to signing key mismatches
+2. **Flexibility**: Works with multiple Kubernetes clusters with different key expectations
+3. **Transparency**: Client automatically selects the best token without user intervention
+4. **Security**: Client ID validation prevents unauthorized token generation
+5. **Backward Compatibility**: Works with existing single-token Dex configurations
+
 ## 📊 Performance Considerations
 
 ### SSH Agent Operations

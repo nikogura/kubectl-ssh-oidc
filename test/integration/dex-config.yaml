@@ -40,6 +40,9 @@ connectors:
     allowed_issuers:
     - "kubectl-ssh-oidc"
     
+    allowed_clients:
+    - "kubectl-ssh-oidc"
+    
     default_groups:
     - "authenticated"
     

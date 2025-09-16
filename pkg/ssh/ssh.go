@@ -32,6 +32,9 @@ type Config struct {
 
 	// TokenTTL specifies how long tokens are valid (in seconds)
 	TokenTTL int `json:"token_ttl"`
+
+	// AllowedClients specifies which OAuth2 client IDs are allowed to use this connector
+	AllowedClients []string `json:"allowed_clients"`
 }
 
 // UserConfig contains a user's SSH keys and identity information.
@@ -340,6 +343,25 @@ func (c *SSHConnector) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	clientID := r.FormValue("client_id")
+	if clientID == "" {
+		http.Error(w, "Missing client_id parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Validate client ID against allowed clients
+	allowed := false
+	for _, allowedClient := range c.config.AllowedClients {
+		if clientID == allowedClient {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		http.Error(w, "Unauthorized client ID", http.StatusUnauthorized)
+		return
+	}
+
 	// Validate SSH JWT and get identity
 	identity, err := c.validateSSHJWT(sshJWT)
 	if err != nil {
@@ -348,7 +370,7 @@ func (c *SSHConnector) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 	}
 
 	// Generate multiple token options with all available signing keys
-	tokenOptions, err := c.generateAllTokenOptions(identity)
+	tokenOptions, err := c.generateAllTokenOptions(identity, clientID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to generate token options: %v", err), http.StatusInternalServerError)
 		return
@@ -389,7 +411,7 @@ func (c *SSHConnector) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 
 // generateRSASignedTokens generates OIDC tokens using RSA signing that Kubernetes can validate.
 // This uses a fixed RSA key pair for consistency with Kubernetes OIDC configuration.
-func (c *SSHConnector) generateRSASignedTokens(identity connector.Identity) (string, string, error) {
+func (c *SSHConnector) generateRSASignedTokens(identity connector.Identity, clientID string) (string, string, error) {
 	now := time.Now()
 	expiry := now.Add(time.Duration(c.config.TokenTTL) * time.Second)
 
@@ -410,7 +432,7 @@ func (c *SSHConnector) generateRSASignedTokens(identity connector.Identity) (str
 	idClaims := jwt.MapClaims{
 		"iss":                "https://dex-alpha.corp.terrace.fi",
 		"sub":                identity.UserID,
-		"aud":                []string{"kubernetes", "3d65cff418b45c057d8be201240f5e8a"}, // Include client ID
+		"aud":                []string{"kubernetes", clientID}, // Include validated client ID
 		"exp":                expiry.Unix(),
 		"iat":                now.Unix(),
 		"nbf":                now.Unix(),
@@ -459,7 +481,7 @@ func (c *SSHConnector) generateRSASignedTokens(identity connector.Identity) (str
 
 // generateAllTokenOptions generates OIDC tokens with all available signing keys.
 // Returns multiple token options that the client can try until one works with Kubernetes.
-func (c *SSHConnector) generateAllTokenOptions(identity connector.Identity) ([]map[string]interface{}, error) {
+func (c *SSHConnector) generateAllTokenOptions(identity connector.Identity, clientID string) ([]map[string]interface{}, error) {
 	if len(c.signingKeys) == 0 {
 		return nil, errors.New("no signing keys available")
 	}
@@ -496,7 +518,7 @@ func (c *SSHConnector) generateAllTokenOptions(identity connector.Identity) ([]m
 		idClaims := jwt.MapClaims{
 			"iss":                "https://dex-alpha.corp.terrace.fi",
 			"sub":                identity.UserID,
-			"aud":                []string{"kubernetes", "3d65cff418b45c057d8be201240f5e8a"}, // Include client ID
+			"aud":                []string{"kubernetes", clientID}, // Include validated client ID
 			"exp":                expiry.Unix(),
 			"iat":                now.Unix(),
 			"nbf":                now.Unix(),
@@ -709,6 +731,25 @@ func (c *SSHConnector) HandleDirectTokenRequest(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	clientID := r.FormValue("client_id")
+	if clientID == "" {
+		http.Error(w, "Missing client_id parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Validate client ID against allowed clients
+	allowed := false
+	for _, allowedClient := range c.config.AllowedClients {
+		if clientID == allowedClient {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		http.Error(w, "Unauthorized client ID", http.StatusUnauthorized)
+		return
+	}
+
 	// Verify and process the SSH JWT
 	identity, err := c.validateSSHJWT(sshJWT)
 	if err != nil {
@@ -717,7 +758,7 @@ func (c *SSHConnector) HandleDirectTokenRequest(w http.ResponseWriter, r *http.R
 	}
 
 	// Generate RSA-signed OIDC tokens that Kubernetes can validate
-	accessToken, idToken, err := c.generateRSASignedTokens(identity)
+	accessToken, idToken, err := c.generateRSASignedTokens(identity, clientID)
 	if err != nil {
 		http.Error(w, "Failed to generate tokens", http.StatusInternalServerError)
 		return

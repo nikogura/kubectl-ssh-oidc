@@ -656,7 +656,10 @@ func createTokenRequest(config *Config, sshJWT string) (*http.Request, error) {
 	baseURL := strings.TrimSuffix(config.DexURL, "/")
 	tokenURL := baseURL + "/auth/ssh/token"
 
-	formData := url.Values{"ssh_jwt": {sshJWT}}
+	formData := url.Values{
+		"ssh_jwt":   {sshJWT},
+		"client_id": {config.ClientID},
+	}
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, tokenURL, strings.NewReader(formData.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create token request: %w", err)

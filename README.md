@@ -229,6 +229,11 @@ connectors:
     allowed_issuers:
     - "kubectl-ssh-oidc"
     
+    # Security: List of allowed OAuth2 client IDs for multi-client environments
+    allowed_clients:
+    - "your-generated-client-id"       # Must match staticClients configuration
+    - "kubelogin-client-id"            # If using kubelogin alongside kubectl-ssh-oidc
+    
     default_groups:
     - "authenticated"
     
@@ -465,7 +470,7 @@ make check-ssh
 | `No SSH keys found` | Ensure keys in `~/.ssh/` or add to agent: `ssh-add ~/.ssh/id_ed25519` |
 | `SSH agent not running` | `eval $(ssh-agent -s)` or use `SSH_USE_AGENT=false` |
 | `signature type ssh-ed25519 for key type ssh-rsa` | **Fixed in v0.0.18+**: SSH signature verification now correctly matches key types. Update to latest version. |
-| `JWT token validation failed` / `Unauthorized` | **Fixed in latest**: JWT tokens now include proper `kid` (Key ID) field in headers for Kubernetes validation. Requires server-side deployment. |
+| `JWT token validation failed` / `Unauthorized` | **Fixed in latest**: Implemented multiple token authentication system where Dex returns tokens signed with all available keys, allowing kubectl to select the correct token that matches Kubernetes API server expectations. |
 | `Key not authorized in Dex` | Check fingerprint matches Dex config |
 | `User not found in Dex` | Set username: `kubectl-ssh-oidc https://dex.example.com kubectl-ssh-oidc your-username` or `export KUBECTL_SSH_USER=your-username` |
 | `Passphrase prompt fails` | Ensure TTY available or use unencrypted keys |
