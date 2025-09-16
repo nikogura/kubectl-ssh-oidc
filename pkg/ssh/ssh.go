@@ -1,7 +1,6 @@
 package ssh
 
 import (
-	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
@@ -414,6 +413,8 @@ func (c *SSHConnector) generateRSASignedTokens(identity connector.Identity) (str
 	if c.keyID != "" {
 		accessToken.Header["kid"] = c.keyID
 	}
+	// Remove typ header to match standard Dex OIDC tokens
+	delete(accessToken.Header, "typ")
 	accessTokenString, err := accessToken.SignedString(signingKey)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to sign access token: %w", err)
@@ -424,6 +425,8 @@ func (c *SSHConnector) generateRSASignedTokens(identity connector.Identity) (str
 	if c.keyID != "" {
 		idToken.Header["kid"] = c.keyID
 	}
+	// Remove typ header to match standard Dex OIDC tokens
+	delete(idToken.Header, "typ")
 	idTokenString, err := idToken.SignedString(signingKey)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to sign ID token: %w", err)
@@ -432,33 +435,15 @@ func (c *SSHConnector) generateRSASignedTokens(identity connector.Identity) (str
 	return accessTokenString, idTokenString, nil
 }
 
-// getSigningKey returns a consistent RSA private key for token signing.
-// This should use the same key that Dex uses for standard OIDC tokens.
+// getSigningKey returns Dex's RSA private key for token signing.
+// This MUST use the same key that Dex uses for standard OIDC tokens.
 func (c *SSHConnector) getSigningKey() (*rsa.PrivateKey, error) {
 	if c.signingKey != nil {
 		return c.signingKey, nil
 	}
 
-	// Use a consistent key generation approach
-	// For production, this should be Dex's actual signing key
-	// For now, create a deterministic key that will be consistent across restarts
-	return c.generateConsistentKey()
-}
-
-// generateConsistentKey creates a consistent RSA key for token signing.
-// This generates the same key each time to ensure token validation works.
-func (c *SSHConnector) generateConsistentKey() (*rsa.PrivateKey, error) {
-	// For testing/development, use a simple key generation
-	// In production, this should be replaced with Dex's actual signing key
-
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate RSA key: %w", err)
-	}
-
-	// Cache the key for future use
-	c.signingKey = key
-	return key, nil
+	// No fallback key generation - we must use Dex's actual signing key
+	return nil, errors.New("no signing key available: SSH connector must receive Dex's signing key via SetSigningKeyFromInterface")
 }
 
 // SetSigningKey sets Dex's RSA signing key for token generation.
