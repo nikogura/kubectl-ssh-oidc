@@ -3,6 +3,10 @@ issuer: http://localhost:5556/dex
 storage:
   type: memory
 
+expiry:
+  signingKeys: "1m"  # Force key rotation every minute to create multiple keys
+  idTokens: "1h"
+
 web:
   http: 0.0.0.0:5556
 

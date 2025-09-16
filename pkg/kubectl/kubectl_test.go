@@ -1,4 +1,5 @@
 // TODO: Update tests for jwt-ssh-agent approach
+//go:build ignore
 // +build ignore
 
 package kubectl

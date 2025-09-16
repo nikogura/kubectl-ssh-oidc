@@ -657,22 +657,29 @@ func createValidSSHJWT(t *testing.T, signer ssh.Signer, pubKeyBytes []byte, fing
 */
 
 func TestSSHConnector_SetSigningKeyFromInterface(t *testing.T) {
-	config := &Config{}
-	conn, err := config.Open("test", nil)
-	require.NoError(t, err)
-	sshConnector := conn.(*SSHConnector)
-
 	t.Run("rsa_private_key", func(t *testing.T) {
+		// Create fresh connector for this test
+		config := &Config{}
+		conn, err := config.Open("test", nil)
+		require.NoError(t, err)
+		sshConnector := conn.(*SSHConnector)
 		// Test with direct RSA private key
 		rsaKey, keyErr := rsa.GenerateKey(rand.Reader, 2048)
 		require.NoError(t, keyErr)
 
 		setErr := sshConnector.SetSigningKeyFromInterface(rsaKey)
 		require.NoError(t, setErr)
-		assert.Equal(t, rsaKey, sshConnector.signingKey)
+		require.Len(t, sshConnector.signingKeys, 1)
+		assert.Equal(t, rsaKey, sshConnector.signingKeys[0])
 	})
 
 	t.Run("jose_json_web_key", func(t *testing.T) {
+		// Create fresh connector for this test
+		config := &Config{}
+		conn, err := config.Open("test", nil)
+		require.NoError(t, err)
+		sshConnector := conn.(*SSHConnector)
+
 		// Test with JOSE JSONWebKey containing RSA key
 		rsaKey, keyErr := rsa.GenerateKey(rand.Reader, 2048)
 		require.NoError(t, keyErr)
@@ -683,10 +690,17 @@ func TestSSHConnector_SetSigningKeyFromInterface(t *testing.T) {
 
 		setErr := sshConnector.SetSigningKeyFromInterface(joseKey)
 		require.NoError(t, setErr)
-		assert.Equal(t, rsaKey, sshConnector.signingKey)
+		require.Len(t, sshConnector.signingKeys, 1)
+		assert.Equal(t, rsaKey, sshConnector.signingKeys[0])
 	})
 
 	t.Run("jose_with_unsupported_key", func(t *testing.T) {
+		// Create fresh connector for this test
+		config := &Config{}
+		conn, err := config.Open("test", nil)
+		require.NoError(t, err)
+		sshConnector := conn.(*SSHConnector)
+
 		// Test with JOSE JSONWebKey containing non-RSA key
 		joseKey := &jose.JSONWebKey{
 			Key: "not-an-rsa-key",
@@ -698,6 +712,12 @@ func TestSSHConnector_SetSigningKeyFromInterface(t *testing.T) {
 	})
 
 	t.Run("unsupported_type", func(t *testing.T) {
+		// Create fresh connector for this test
+		config := &Config{}
+		conn, err := config.Open("test", nil)
+		require.NoError(t, err)
+		sshConnector := conn.(*SSHConnector)
+
 		// Test with unsupported key type
 		setErr := sshConnector.SetSigningKeyFromInterface("unsupported-type")
 		require.Error(t, setErr)

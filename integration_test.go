@@ -1,3 +1,4 @@
+//go:build integration
 // +build integration
 
 package main
@@ -57,7 +58,7 @@ func TestEndToEndFlow(t *testing.T) {
 	t.Run("SSH JWT creation", func(t *testing.T) {
 		// This will only work if SSH agent has keys loaded
 		sshJWT, err := kubectl.CreateSSHSignedJWT(config)
-		
+
 		if err != nil {
 			t.Logf("SSH JWT creation failed (expected if no SSH agent): %v", err)
 			t.Skip("SSH agent not available or no keys loaded")
@@ -104,7 +105,7 @@ func TestSSHConnectorIntegration(t *testing.T) {
 	t.Run("LoginURL generation", func(t *testing.T) {
 		scopes := ssh.Scopes{}
 		loginURL, err := sshConnector.LoginURL(scopes, "http://callback.example.com", "integration-state")
-		
+
 		require.NoError(t, err)
 		assert.Contains(t, loginURL, "ssh_auth=true")
 		assert.Contains(t, loginURL, "integration-state")
@@ -213,7 +214,7 @@ func TestRealSSHFlow(t *testing.T) {
 
 	t.Run("SSH signing capability", func(t *testing.T) {
 		testData := []byte("integration test data")
-		
+
 		signature, pubKey, err := sshClient.SignData(testData)
 		require.NoError(t, err)
 		assert.NotNil(t, signature)

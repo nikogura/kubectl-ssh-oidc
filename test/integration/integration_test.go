@@ -379,12 +379,12 @@ func validateJWTToken(t *testing.T, tokenString, expectedUsername string) {
 	require.True(t, ok, "JWT header should have string algorithm")
 	assert.Equal(t, "RS256", alg, "Token should use RS256 algorithm for Kubernetes compatibility")
 
-	// Verify token type
-	typ, ok := header["typ"].(string)
-	require.True(t, ok, "JWT header should have string type")
-	assert.Equal(t, "JWT", typ, "Token should be JWT type")
+	// Verify token type (optional in JWT, Dex omits it)
+	if typ, typOk := header["typ"].(string); typOk {
+		assert.Equal(t, "JWT", typ, "Token should be JWT type if present")
+	}
 
-	t.Logf("✅ JWT header validation passed - algorithm: %s, type: %s", alg, typ)
+	t.Logf("✅ JWT header validation passed - algorithm: %s", alg)
 
 	// Decode payload without verification to check claims
 	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])

@@ -68,18 +68,32 @@ func (s *Server) handleSSHDirectToken(w http.ResponseWriter, r *http.Request) {
 		s.logger.Infof("DEBUG: Dex SigningKey ID: %s", keySet.SigningKey.KeyID)
 		s.logger.Infof("DEBUG: Dex has %d verification keys", len(keySet.VerificationKeys))
 		for i, vk := range keySet.VerificationKeys {
-			s.logger.Infof("DEBUG: VerificationKey[%d] type: %T", i, vk.PublicKey)
+			s.logger.Infof("DEBUG: VerificationKey[%d] KeyID: %s, type: %T", i, vk.PublicKey.KeyID, vk.PublicKey)
 		}
 
-		// For now, use the existing SigningKey (we'll investigate why it has wrong KeyID)
+		// Provide ALL available keys to the SSH connector so it can try each one
+		// First add the current signing key
 		signingKey := keySet.SigningKey
+		s.logger.Infof("DEBUG: Adding Dex SigningKey with KeyID: %s", signingKey.KeyID)
 
-		// Set the signing key in the SSH connector
 		if keyErr := sshConn.SetSigningKeyFromInterface(signingKey); keyErr != nil {
 			s.logger.Errorf("Failed to set signing key: %v", keyErr)
 			http.Error(w, "Failed to configure signing key", http.StatusInternalServerError)
 			return
 		}
+
+		// Try to add verification keys if they contain private key material
+		for i, vk := range keySet.VerificationKeys {
+			s.logger.Infof("DEBUG: Attempting to add VerificationKey[%d] with KeyID: %s", i, vk.PublicKey.KeyID)
+			
+			if addErr := sshConn.SetSigningKeyFromInterface(vk.PublicKey); addErr != nil {
+				s.logger.Infof("DEBUG: VerificationKey[%d] cannot be used for signing: %v", i, addErr)
+			} else {
+				s.logger.Infof("DEBUG: Successfully added VerificationKey[%d] with KeyID: %s", i, vk.PublicKey.KeyID)
+			}
+		}
+
+		s.logger.Infof("DEBUG: SSH connector initialized with signing key options")
 
 		sshConn.HandleDirectTokenRequest(w, r)
 	} else {

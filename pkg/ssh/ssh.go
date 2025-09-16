@@ -53,10 +53,11 @@ type UserInfo struct {
 
 // SSHConnector implements the Dex connector interface for SSH key authentication.
 type SSHConnector struct {
-	config     Config
-	logger     interface{}
-	signingKey *rsa.PrivateKey // Dex's actual RSA signing key
-	keyID      string          // Dex's signing key ID for JWT header
+	config          Config
+	logger          interface{}
+	signingKeys     []*rsa.PrivateKey // Multiple Dex RSA signing keys to try
+	keyIDs          []string          // Corresponding key IDs for JWT headers
+	currentKeyIndex int               // Index of currently selected key
 }
 
 // Open creates a new SSH connector.
@@ -346,19 +347,18 @@ func (c *SSHConnector) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Generate proper OIDC tokens using RSA signing
-	accessToken, idToken, err := c.generateRSASignedTokens(identity)
+	// Generate multiple token options with all available signing keys
+	tokenOptions, err := c.generateAllTokenOptions(identity)
 	if err != nil {
-		http.Error(w, "Failed to generate OIDC tokens", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to generate token options: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Return standard OIDC token response
+	// Return response with multiple token options for client to try
 	tokenResp := map[string]interface{}{
-		"access_token": accessToken,
-		"id_token":     idToken,
-		"token_type":   "Bearer",
-		"expires_in":   c.config.TokenTTL,
+		"token_type": "Bearer",
+		"expires_in": c.config.TokenTTL,
+		"tokens":     tokenOptions,
 		"user_info": map[string]interface{}{
 			"sub":                identity.UserID,
 			"name":               identity.Username,
@@ -366,6 +366,17 @@ func (c *SSHConnector) HandleTokenRequest(w http.ResponseWriter, r *http.Request
 			"email":              identity.Email,
 			"groups":             identity.Groups,
 		},
+	}
+
+	// For backward compatibility, also include first token as primary
+	if len(tokenOptions) > 0 {
+		firstOption := tokenOptions[0]
+		if accessToken, ok := firstOption["access_token"].(string); ok {
+			tokenResp["access_token"] = accessToken
+		}
+		if idToken, ok := firstOption["id_token"].(string); ok {
+			tokenResp["id_token"] = idToken
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -421,8 +432,8 @@ func (c *SSHConnector) generateRSASignedTokens(identity connector.Identity) (str
 
 	// Generate access token with proper kid header
 	accessToken := jwt.NewWithClaims(signingMethod, accessClaims)
-	if c.keyID != "" {
-		accessToken.Header["kid"] = c.keyID
+	if keyID := c.getCurrentKeyID(); keyID != "" {
+		accessToken.Header["kid"] = keyID
 	}
 	// Remove typ header to match standard Dex OIDC tokens
 	delete(accessToken.Header, "typ")
@@ -433,8 +444,8 @@ func (c *SSHConnector) generateRSASignedTokens(identity connector.Identity) (str
 
 	// Generate ID token with proper kid header
 	idToken := jwt.NewWithClaims(signingMethod, idClaims)
-	if c.keyID != "" {
-		idToken.Header["kid"] = c.keyID
+	if keyID := c.getCurrentKeyID(); keyID != "" {
+		idToken.Header["kid"] = keyID
 	}
 	// Remove typ header to match standard Dex OIDC tokens
 	delete(idToken.Header, "typ")
@@ -446,26 +457,145 @@ func (c *SSHConnector) generateRSASignedTokens(identity connector.Identity) (str
 	return accessTokenString, idTokenString, nil
 }
 
-// getSigningKey returns Dex's RSA private key for token signing.
-// This MUST use the same key that Dex uses for standard OIDC tokens.
-func (c *SSHConnector) getSigningKey() (*rsa.PrivateKey, error) {
-	if c.signingKey != nil {
-		// DEBUG: Log that we're using Dex's signing key
-		fmt.Printf("DEBUG: SSH connector using Dex signing key (keyID: %s)\n", c.keyID)
-		return c.signingKey, nil
+// generateAllTokenOptions generates OIDC tokens with all available signing keys.
+// Returns multiple token options that the client can try until one works with Kubernetes.
+func (c *SSHConnector) generateAllTokenOptions(identity connector.Identity) ([]map[string]interface{}, error) {
+	if len(c.signingKeys) == 0 {
+		return nil, errors.New("no signing keys available")
 	}
 
-	// DEBUG: Log that no signing key is available
-	fmt.Printf("DEBUG: SSH connector has no signing key - SetSigningKeyFromInterface was never called\n")
+	now := time.Now()
+	expiry := now.Add(time.Duration(c.config.TokenTTL) * time.Second)
+	var tokenOptions []map[string]interface{}
 
-	// No fallback key generation - we must use Dex's actual signing key
-	return nil, errors.New("no signing key available: SSH connector must receive Dex's signing key via SetSigningKeyFromInterface")
+	fmt.Printf("DEBUG: SSH connector generating tokens with %d signing keys\n", len(c.signingKeys))
+
+	// Generate tokens with each available signing key
+	for i, signingKey := range c.signingKeys {
+		keyID := ""
+		if i < len(c.keyIDs) {
+			keyID = c.keyIDs[i]
+		}
+
+		fmt.Printf("DEBUG: Generating token with signing key %d/%d (keyID: %s)\n", i+1, len(c.signingKeys), keyID)
+
+		// Create access token claims
+		accessClaims := jwt.MapClaims{
+			"iss":    "https://dex-alpha.corp.terrace.fi", // Match Dex issuer URL
+			"sub":    identity.UserID,
+			"aud":    "kubernetes",
+			"exp":    expiry.Unix(),
+			"iat":    now.Unix(),
+			"nbf":    now.Unix(),
+			"email":  identity.Email,
+			"groups": identity.Groups,
+			"name":   identity.Username,
+		}
+
+		// Create ID token claims (standard OIDC)
+		idClaims := jwt.MapClaims{
+			"iss":                "https://dex-alpha.corp.terrace.fi",
+			"sub":                identity.UserID,
+			"aud":                []string{"kubernetes", "3d65cff418b45c057d8be201240f5e8a"}, // Include client ID
+			"exp":                expiry.Unix(),
+			"iat":                now.Unix(),
+			"nbf":                now.Unix(),
+			"email":              identity.Email,
+			"email_verified":     true,
+			"groups":             identity.Groups,
+			"name":               identity.Username,
+			"preferred_username": identity.Username,
+		}
+
+		// Use RSA-SHA256 signing method
+		signingMethod := jwt.SigningMethodRS256
+
+		// Generate access token
+		accessToken := jwt.NewWithClaims(signingMethod, accessClaims)
+		if keyID != "" {
+			accessToken.Header["kid"] = keyID
+		}
+		delete(accessToken.Header, "typ")
+		accessTokenString, err := accessToken.SignedString(signingKey)
+		if err != nil {
+			fmt.Printf("DEBUG: Failed to sign access token with key %d: %v\n", i+1, err)
+			continue // Skip this key and try the next one
+		}
+
+		// Generate ID token with proper kid header
+		idToken := jwt.NewWithClaims(signingMethod, idClaims)
+		if keyID != "" {
+			idToken.Header["kid"] = keyID
+		}
+		// Remove typ header to match standard Dex OIDC tokens
+		delete(idToken.Header, "typ")
+		idTokenString, err := idToken.SignedString(signingKey)
+		if err != nil {
+			fmt.Printf("DEBUG: Failed to sign ID token with key %d: %v\n", i+1, err)
+			continue // Skip this key and try the next one
+		}
+
+		// Create token option
+		tokenOption := map[string]interface{}{
+			"access_token": accessTokenString,
+			"id_token":     idTokenString,
+			"kid":          keyID,
+		}
+
+		tokenOptions = append(tokenOptions, tokenOption)
+		fmt.Printf("DEBUG: Successfully generated token option %d with keyID: %s\n", len(tokenOptions), keyID)
+	}
+
+	if len(tokenOptions) == 0 {
+		return nil, errors.New("failed to generate tokens with any available signing key")
+	}
+
+	fmt.Printf("DEBUG: Generated %d token options\n", len(tokenOptions))
+	return tokenOptions, nil
+}
+
+// getSigningKey returns the current Dex RSA private key for token signing.
+func (c *SSHConnector) getSigningKey() (*rsa.PrivateKey, error) {
+	if len(c.signingKeys) == 0 {
+		fmt.Printf("DEBUG: SSH connector has no signing keys - SetSigningKeyFromInterface was never called\n")
+		return nil, errors.New("no signing keys available: SSH connector must receive Dex's signing keys via SetSigningKeyFromInterface")
+	}
+
+	if c.currentKeyIndex >= len(c.signingKeys) {
+		return nil, errors.New("current key index out of range")
+	}
+
+	currentKeyID := ""
+	if c.currentKeyIndex < len(c.keyIDs) {
+		currentKeyID = c.keyIDs[c.currentKeyIndex]
+	}
+
+	fmt.Printf("DEBUG: SSH connector using signing key %d/%d (keyID: %s)\n",
+		c.currentKeyIndex+1, len(c.signingKeys), currentKeyID)
+
+	return c.signingKeys[c.currentKeyIndex], nil
+}
+
+// getCurrentKeyID returns the current key ID for JWT headers.
+func (c *SSHConnector) getCurrentKeyID() string {
+	if c.currentKeyIndex < len(c.keyIDs) {
+		return c.keyIDs[c.currentKeyIndex]
+	}
+	return ""
 }
 
 // SetSigningKey sets Dex's RSA signing key for token generation.
 // This should be called during SSH connector initialization with Dex's actual key.
 func (c *SSHConnector) SetSigningKey(key *rsa.PrivateKey) {
-	c.signingKey = key
+	c.signingKeys = []*rsa.PrivateKey{key}
+	c.keyIDs = []string{""}
+	c.currentKeyIndex = 0
+}
+
+// AddSigningKey adds another signing key to try (for key iteration).
+func (c *SSHConnector) AddSigningKey(key *rsa.PrivateKey, keyID string) {
+	c.signingKeys = append(c.signingKeys, key)
+	c.keyIDs = append(c.keyIDs, keyID)
 }
 
 // SetSigningKeyFromInterface allows external code to set the signing key from any private key interface.
@@ -476,23 +606,47 @@ func (c *SSHConnector) SetSigningKeyFromInterface(key interface{}) error {
 
 	switch k := key.(type) {
 	case *rsa.PrivateKey:
-		c.signingKey = k
-		// No key ID available for raw RSA keys
-		c.keyID = ""
-		fmt.Printf("DEBUG: SSH connector set raw RSA private key (no keyID)\n")
+		// Initialize with first key
+		if len(c.signingKeys) == 0 {
+			c.signingKeys = []*rsa.PrivateKey{k}
+			c.keyIDs = []string{""}
+			c.currentKeyIndex = 0
+		} else {
+			c.signingKeys = append(c.signingKeys, k)
+			c.keyIDs = append(c.keyIDs, "")
+		}
+		fmt.Printf("DEBUG: SSH connector added raw RSA private key (no keyID)\n")
 		return nil
 	case *jose.JSONWebKey:
 		// Extract RSA private key from JOSE key
 		if rsaKey, ok := k.Key.(*rsa.PrivateKey); ok {
-			c.signingKey = rsaKey
-			c.keyID = k.KeyID // Store the key ID for JWT headers
-			fmt.Printf("DEBUG: SSH connector set JOSE key with keyID: %s\n", c.keyID)
+			// Initialize with first key
+			if len(c.signingKeys) == 0 {
+				c.signingKeys = []*rsa.PrivateKey{rsaKey}
+				c.keyIDs = []string{k.KeyID}
+				c.currentKeyIndex = 0
+			} else {
+				c.signingKeys = append(c.signingKeys, rsaKey)
+				c.keyIDs = append(c.keyIDs, k.KeyID)
+			}
+			fmt.Printf("DEBUG: SSH connector added JOSE key with keyID: %s (total keys: %d)\n", k.KeyID, len(c.signingKeys))
 			return nil
 		}
 		return fmt.Errorf("JSONWebKey does not contain RSA private key, got: %T", k.Key)
 	default:
 		return fmt.Errorf("unsupported key type: %T", key)
 	}
+}
+
+// TryNextKey switches to the next available signing key (for key iteration).
+func (c *SSHConnector) TryNextKey() bool {
+	if c.currentKeyIndex+1 < len(c.signingKeys) {
+		c.currentKeyIndex++
+		fmt.Printf("DEBUG: SSH connector switched to key %d/%d (keyID: %s)\n",
+			c.currentKeyIndex+1, len(c.signingKeys), c.getCurrentKeyID())
+		return true
+	}
+	return false
 }
 
 // SSHSigningMethodServer implements JWT signing method for server-side SSH verification.

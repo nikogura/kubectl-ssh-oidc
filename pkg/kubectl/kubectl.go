@@ -56,6 +56,16 @@ type DexTokenResponse struct {
 	ExpiresIn    int    `json:"expires_in"`
 	RefreshToken string `json:"refresh_token,omitempty"`
 	IDToken      string `json:"id_token,omitempty"`
+
+	// Multiple token support for signing key iteration
+	Tokens []TokenOption `json:"tokens,omitempty"`
+}
+
+// TokenOption represents a single token option with its metadata.
+type TokenOption struct {
+	AccessToken string `json:"access_token"`
+	IDToken     string `json:"id_token"`
+	KeyID       string `json:"kid"`
 }
 
 // SSHKey represents a unified SSH key structure for both agent and filesystem keys.
@@ -572,23 +582,81 @@ func (e *MultiKeyAuthError) Error() string {
 	return strings.Join(errorLines, "\n")
 }
 
-// ExchangeWithDex exchanges the SSH-signed JWT for an OIDC token from Dex.
-// Uses direct token exchange - sends SSH JWT directly to token endpoint.
-func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) {
-	err := validateJWT(sshJWT)
-	if err != nil {
-		return nil, err
+// debugLogTokens logs available tokens for debugging.
+func debugLogTokens(tokens []TokenOption) {
+	if os.Getenv("DEBUG") != trueString {
+		return
+	}
+	fmt.Printf("DEBUG: Selecting from %d token options:\n", len(tokens))
+	for i, token := range tokens {
+		fmt.Printf("DEBUG: Token %d - KeyID: %s, HasIDToken: %t, HasAccessToken: %t\n",
+			i+1, token.KeyID, token.IDToken != "", token.AccessToken != "")
+	}
+}
+
+// debugLogSelectedToken logs the selected token for debugging.
+func debugLogSelectedToken(tokenType, keyID string) {
+	if os.Getenv("DEBUG") != trueString {
+		return
+	}
+	if keyID != "" {
+		fmt.Printf("DEBUG: Selected %s token with KeyID: %s\n", tokenType, keyID)
+	} else {
+		fmt.Printf("DEBUG: Selected %s token without KeyID\n", tokenType)
+	}
+}
+
+// selectTokenFromOption returns the best token from a single token option.
+func selectTokenFromOption(token TokenOption) (string, string) {
+	if token.IDToken != "" {
+		return token.IDToken, "ID"
+	}
+	if token.AccessToken != "" {
+		return token.AccessToken, "access"
+	}
+	return "", ""
+}
+
+// selectBestToken selects the best token from multiple token options.
+// Prefers tokens with key IDs and returns the first valid one found.
+func selectBestToken(tokenResponse *DexTokenResponse) (string, error) {
+	// Fall back to primary token fields for backward compatibility
+	if len(tokenResponse.Tokens) == 0 {
+		if tokenResponse.IDToken != "" {
+			return tokenResponse.IDToken, nil
+		}
+		return tokenResponse.AccessToken, nil
 	}
 
+	debugLogTokens(tokenResponse.Tokens)
+
+	// First preference: tokens with key IDs
+	for _, token := range tokenResponse.Tokens {
+		if token.KeyID != "" {
+			if selectedToken, tokenType := selectTokenFromOption(token); selectedToken != "" {
+				debugLogSelectedToken(tokenType, token.KeyID)
+				return selectedToken, nil
+			}
+		}
+	}
+
+	// Second preference: any token without key ID
+	for _, token := range tokenResponse.Tokens {
+		if selectedToken, tokenType := selectTokenFromOption(token); selectedToken != "" {
+			debugLogSelectedToken(tokenType, "")
+			return selectedToken, nil
+		}
+	}
+
+	return "", errors.New("no valid tokens found in token options")
+}
+
+// createTokenRequest creates an HTTP request for token exchange.
+func createTokenRequest(config *Config, sshJWT string) (*http.Request, error) {
 	baseURL := strings.TrimSuffix(config.DexURL, "/")
 	tokenURL := baseURL + "/auth/ssh/token"
 
-	// Direct SSH JWT authentication - custom kubectl credential plugin flow
-	formData := url.Values{
-		"ssh_jwt": {sshJWT},
-	}
-
-	// Create HTTP request
+	formData := url.Values{"ssh_jwt": {sshJWT}}
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, tokenURL, strings.NewReader(formData.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create token request: %w", err)
@@ -597,44 +665,54 @@ func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	// Add client authentication via Basic Auth header
 	if config.ClientSecret != "" {
 		req.SetBasicAuth(config.ClientID, config.ClientSecret)
 	}
 
-	// Send request
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to exchange with Dex: %w", err)
-	}
-	defer resp.Body.Close()
+	return req, nil
+}
 
-	// Read response
+// processTokenResponse processes the HTTP response and parses the token response.
+func processTokenResponse(resp *http.Response) (*DexTokenResponse, error) {
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read token response: %w", err)
 	}
 
-	// Check for errors
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("SSH authentication failed (%d): %s", resp.StatusCode, string(respBody))
 	}
 
-	// Debug: print raw response if DEBUG is set
-	if os.Getenv("DEBUG") == "true" {
+	if os.Getenv("DEBUG") == trueString {
 		fmt.Fprintf(os.Stderr, "DEBUG: Dex response: %s\n", string(respBody))
 	}
 
-	// Parse JSON response
 	var tokenResp DexTokenResponse
 	parseErr := json.Unmarshal(respBody, &tokenResp)
 	if parseErr != nil {
 		return nil, fmt.Errorf("failed to parse token response: %w", parseErr)
 	}
 
+	return &tokenResp, nil
+}
+
+// updateResponseForBackwardCompatibility updates the response for backward compatibility.
+func updateResponseForBackwardCompatibility(tokenResp *DexTokenResponse, selectedToken string) {
+	// Update response for backward compatibility
+	if len(tokenResp.Tokens) > 0 {
+		for _, token := range tokenResp.Tokens {
+			if (selectedToken == token.IDToken && token.IDToken != "") ||
+				(selectedToken == token.AccessToken && token.AccessToken != "") {
+				if os.Getenv("DEBUG") == trueString {
+					fmt.Printf("DEBUG: Selected token with keyID: %s from %d options\n", token.KeyID, len(tokenResp.Tokens))
+				}
+				break
+			}
+		}
+	}
+
 	// Debug: print parsed response if DEBUG is set
-	if os.Getenv("DEBUG") == "true" {
+	if os.Getenv("DEBUG") == trueString {
 		fmt.Fprintf(os.Stderr, "DEBUG: AccessToken length: %d, IDToken length: %d\n", len(tokenResp.AccessToken), len(tokenResp.IDToken))
 		if tokenResp.IDToken != "" {
 			fmt.Fprintf(os.Stderr, "DEBUG: Using ID token for authentication\n")
@@ -642,8 +720,40 @@ func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) {
 			fmt.Fprintf(os.Stderr, "DEBUG: Using access token for authentication\n")
 		}
 	}
+}
 
-	return &tokenResp, nil
+// ExchangeWithDex exchanges the SSH-signed JWT for an OIDC token from Dex.
+// Uses direct token exchange - sends SSH JWT directly to token endpoint.
+func ExchangeWithDex(config *Config, sshJWT string) (*DexTokenResponse, error) {
+	err := validateJWT(sshJWT)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := createTokenRequest(config, sshJWT)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to exchange with Dex: %w", err)
+	}
+	defer resp.Body.Close()
+
+	tokenResp, err := processTokenResponse(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	selectedToken, err := selectBestToken(tokenResp)
+	if err != nil {
+		return nil, fmt.Errorf("failed to select best token: %w", err)
+	}
+
+	updateResponseForBackwardCompatibility(tokenResp, selectedToken)
+	return tokenResp, nil
 }
 
 // ConvertSSHJWTToOIDC converts an SSH-signed JWT to an OIDC-compatible JWT.
