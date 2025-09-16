@@ -6,11 +6,11 @@ toolchain go1.24.7
 
 require (
 	github.com/dexidp/dex v2.13.0+incompatible
+	github.com/go-jose/go-jose/v4 v4.1.2
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.42.0
 	golang.org/x/term v0.35.0
-	gopkg.in/square/go-jose.v2 v2.6.0
 	k8s.io/apimachinery v0.34.1
 	k8s.io/client-go v0.34.1
 )

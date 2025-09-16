@@ -10,9 +10,9 @@ import (
 	"testing"
 
 	"github.com/dexidp/dex/connector"
+	"github.com/go-jose/go-jose/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/square/go-jose.v2"
 
 	"github.com/nikogura/kubectl-ssh-oidc/testdata"
 )

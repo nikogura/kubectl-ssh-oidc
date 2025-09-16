@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/dexidp/dex/connector"
+	"github.com/go-jose/go-jose/v4"
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/ssh"
-	"gopkg.in/square/go-jose.v2"
 )
 
 // Config holds the configuration for the SSH connector.

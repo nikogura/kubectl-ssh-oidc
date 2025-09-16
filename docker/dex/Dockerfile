@@ -77,9 +77,9 @@ func (s *Server) handleSSHDirectToken(w http.ResponseWriter, r *http.Request) {
 }
 EOF
 
-# Add JOSE dependency for SSH connector
+# Add JOSE dependency for SSH connector (v4 to match Dex v2.39.1)
 RUN cd dex && \
-    go mod edit -require gopkg.in/square/go-jose.v2@v2.6.0 && \
+    go mod edit -require github.com/go-jose/go-jose/v4@v4.0.1 && \
     go mod tidy
 
 # Build Dex with SSH connector
