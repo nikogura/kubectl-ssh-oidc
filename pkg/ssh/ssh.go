@@ -20,10 +20,6 @@ type Config struct {
 	// Users maps usernames to their SSH key configuration and user information
 	Users map[string]UserConfig `json:"users"`
 
-	// AuthorizedKeys maps SSH key fingerprints to user information (DEPRECATED: use Users instead)
-	// This field is maintained for backward compatibility
-	AuthorizedKeys map[string]UserInfo `json:"authorized_keys,omitempty"`
-
 	// AllowedIssuers specifies which JWT issuers are accepted
 	AllowedIssuers []string `json:"allowed_issuers"`
 
@@ -294,17 +290,6 @@ func (c *SSHConnector) findUserByUsernameAndKey(username, keyFingerprint string)
 			}
 		}
 		return UserInfo{}, fmt.Errorf("key %s not authorized for user %s", keyFingerprint, username)
-	}
-
-	// Fall back to legacy AuthorizedKeys format for backward compatibility
-	if c.config.AuthorizedKeys != nil {
-		if userInfo, exists := c.config.AuthorizedKeys[keyFingerprint]; exists {
-			// Verify the username matches
-			if userInfo.Username == username {
-				return userInfo, nil
-			}
-			return UserInfo{}, fmt.Errorf("key %s belongs to user %s, not %s", keyFingerprint, userInfo.Username, username)
-		}
 	}
 
 	return UserInfo{}, fmt.Errorf("user %s not found or key %s not authorized", username, keyFingerprint)

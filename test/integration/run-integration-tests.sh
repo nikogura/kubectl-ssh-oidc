@@ -100,7 +100,6 @@ connectors:
     token_ttl: 3600
 staticClients:
 - id: test
-  redirectURIs: ['http://localhost:8000']
   name: 'Test'  
   secret: test
 EOF

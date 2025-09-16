@@ -180,10 +180,6 @@ issuer: https://dex.example.com
 
 staticClients:
 - id: your-generated-client-id        # Generate secure random client ID
-  redirectURIs:
-  - 'urn:ietf:wg:oauth:2.0:oob'
-  - 'http://localhost:8080'
-  - 'http://localhost:18000'
   name: 'kubectl SSH OIDC Plugin'
   secret: your-generated-client-secret # Generate secure random client secret
 
@@ -192,7 +188,7 @@ connectors:
   id: ssh
   name: SSH Key Authentication
   config:
-    # New format: Multiple keys per user (recommended)
+    # Multiple keys per user
     users:
       "john.doe":
         keys:
@@ -217,22 +213,12 @@ connectors:
         - "developers"
         - "team-leads"
     
-    # Legacy format: One key per user (deprecated but still supported)
-    # authorized_keys:
-    #   "SHA256:ReaXtz6Lw2YafMuyKNsn09uopRoV/DSdfMz3auedlc4":
-    #     username: "legacy.user"
-    #     email: "legacy@example.com"
-    #     full_name: "Legacy User"
-    #     groups:
-    #     - "legacy-group"
-    
     allowed_issuers:
     - "kubectl-ssh-oidc"
     
     # Security: List of allowed OAuth2 client IDs for multi-client environments
     allowed_clients:
     - "your-generated-client-id"       # Must match staticClients configuration
-    - "kubelogin-client-id"            # If using kubelogin alongside kubectl-ssh-oidc
     
     default_groups:
     - "authenticated"
@@ -543,7 +529,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 🙏 Acknowledgments
 
 - [Dex Identity Service](https://dexidp.io/) for the extensible OIDC provider
-- [kubelogin](https://github.com/int128/kubelogin) for kubectl OIDC integration patterns
 - [jwt-ssh-agent-go](https://github.com/nikogura/jwt-ssh-agent-go) for SSH agent JWT concepts
 - The Kubernetes community for the exec credential plugin interface
 

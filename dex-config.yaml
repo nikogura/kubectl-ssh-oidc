@@ -16,16 +16,8 @@ web:
 telemetry:
   http: 0.0.0.0:5558
 
-# OAuth2 clients
-oauth2:
-  skipApprovalScreen: true
-
 staticClients:
 - id: 3d65cff418b45c057d8be201240f5e8a
-  redirectURIs:
-  - 'urn:ietf:wg:oauth:2.0:oob'
-  - 'http://localhost:8080'
-  - 'http://localhost:18000'
   name: 'kubectl SSH OIDC Plugin'
   secret: YpWPCFkIX/KZUgoSKvxMj6Oefe9E6WJWQYKamWTkY/A=
 
