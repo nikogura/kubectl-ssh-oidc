@@ -403,9 +403,9 @@ func validateJWTToken(t *testing.T, tokenString, expectedUsername string) {
 	require.True(t, ok, "JWT should have string issuer claim")
 	assert.Equal(t, "https://dex-alpha.corp.terrace.fi", iss, "Issuer should match Dex URL")
 
-	aud, ok := claims["aud"].([]interface{})
-	require.True(t, ok, "JWT should have audience claim as array")
-	require.Contains(t, aud, "kubernetes", "Audience should contain kubernetes")
+	aud, ok := claims["aud"].(string)
+	require.True(t, ok, "JWT should have audience claim as string")
+	require.Equal(t, "kubectl-ssh-oidc", aud, "Audience should be client ID")
 
 	exp, ok := claims["exp"].(float64)
 	require.True(t, ok, "JWT should have numeric expiration claim")

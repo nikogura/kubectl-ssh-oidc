@@ -1,13 +1,30 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
 	"github.com/nikogura/kubectl-ssh-oidc/pkg/kubectl"
+	clientauthv1 "k8s.io/client-go/pkg/apis/clientauthentication/v1"
 )
 
 func main() {
+	// Check if we're being called as an ExecCredential plugin
+	execInfo := os.Getenv("KUBERNETES_EXEC_INFO")
+	if execInfo != "" {
+		// Parse the ExecCredential input
+		var execCredential clientauthv1.ExecCredential
+		err := json.Unmarshal([]byte(execInfo), &execCredential)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to parse KUBERNETES_EXEC_INFO: %v\n", err)
+			os.Exit(1)
+		}
+
+		// We're being called by kubectl as a credential provider
+		// The config should still come from environment variables set in kubeconfig
+	}
+
 	// Load configuration
 	config := kubectl.LoadConfig()
 

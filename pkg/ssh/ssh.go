@@ -432,7 +432,7 @@ func (c *SSHConnector) generateRSASignedTokens(identity connector.Identity, clie
 	idClaims := jwt.MapClaims{
 		"iss":                "https://dex-alpha.corp.terrace.fi",
 		"sub":                identity.UserID,
-		"aud":                []string{"kubernetes", clientID}, // Include validated client ID
+		"aud":                clientID, // Use only client ID as audience (required by Kubernetes API server)
 		"exp":                expiry.Unix(),
 		"iat":                now.Unix(),
 		"nbf":                now.Unix(),
@@ -518,7 +518,7 @@ func (c *SSHConnector) generateAllTokenOptions(identity connector.Identity, clie
 		idClaims := jwt.MapClaims{
 			"iss":                "https://dex-alpha.corp.terrace.fi",
 			"sub":                identity.UserID,
-			"aud":                []string{"kubernetes", clientID}, // Include validated client ID
+			"aud":                clientID, // Use only client ID as audience (required by Kubernetes API server)
 			"exp":                expiry.Unix(),
 			"iat":                now.Unix(),
 			"nbf":                now.Unix(),

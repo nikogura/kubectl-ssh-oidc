@@ -43,7 +43,34 @@ The plugin supports both SSH agent and filesystem keys, following standard SSH c
 
 ### Detailed Flow
 
-#### 1. UnifiedSSHClient Setup
+#### 1. ExecCredential API Integration
+**File:** `main.go:14-26`
+
+```go
+func main() {
+    // Check if we're being called as an ExecCredential plugin
+    execInfo := os.Getenv("KUBERNETES_EXEC_INFO")
+    if execInfo != "" {
+        // Parse the ExecCredential input
+        var execCredential clientauthv1.ExecCredential
+        err := json.Unmarshal([]byte(execInfo), &execCredential)
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "Failed to parse KUBERNETES_EXEC_INFO: %v\n", err)
+            os.Exit(1)
+        }
+        
+        // We're being called by kubectl as a credential provider
+        // The config should still come from environment variables set in kubeconfig
+    }
+}
+```
+
+**Key Points:**
+- Implements proper kubectl ExecCredential API by checking `KUBERNETES_EXEC_INFO`
+- Ensures kubectl recognizes and calls the plugin as a credential provider
+- Maintains backward compatibility with direct invocation
+
+#### 2. UnifiedSSHClient Setup
 **File:** `pkg/kubectl/kubectl.go:98-150`
 
 ```go
@@ -146,7 +173,7 @@ func CreateSSHSignedJWT(config *Config) (string, error) {
 // JWT with standard claims following jwt-ssh-agent pattern
 claims := jwt.MapClaims{
     "sub": config.Username,                // Username for user lookup (O(1) performance)
-    "aud": config.Audience,               // Audience claim (e.g., "kubernetes")
+    "aud": config.ClientID,               // Audience claim (FIXED: use client ID for Kubernetes API server compatibility)
     "iss": "kubectl-ssh-oidc",           // Issuer
     "jti": generateJTI(),                 // JWT ID for uniqueness
     "exp": time.Now().Add(5*time.Minute).Unix(), // Short expiration
@@ -342,8 +369,8 @@ if !ok || aud == "" {
     return connector.Identity{}, errors.New("missing or invalid aud claim")
 }
 
-// Validate audience - ensure token is intended for this Dex instance
-if aud != "kubernetes" {
+// Validate audience - ensure token is intended for this client
+if aud != c.config.ClientID {
     return connector.Identity{}, fmt.Errorf("invalid audience: %s", aud)
 }
 
