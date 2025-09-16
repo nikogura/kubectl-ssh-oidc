@@ -280,7 +280,7 @@ users:
 - name: ssh-oidc-user
   user:
     exec:
-      apiVersion: client.authentication.k8s.io/v1beta1
+      apiVersion: client.authentication.k8s.io/v1
       command: kubectl-ssh-oidc
       env:
       - name: DEX_URL
@@ -465,6 +465,7 @@ make check-ssh
 | `No SSH keys found` | Ensure keys in `~/.ssh/` or add to agent: `ssh-add ~/.ssh/id_ed25519` |
 | `SSH agent not running` | `eval $(ssh-agent -s)` or use `SSH_USE_AGENT=false` |
 | `signature type ssh-ed25519 for key type ssh-rsa` | **Fixed in v0.0.18+**: SSH signature verification now correctly matches key types. Update to latest version. |
+| `JWT token validation failed` / `Unauthorized` | **Fixed in latest**: JWT tokens now include proper `kid` (Key ID) field in headers for Kubernetes validation. Requires server-side deployment. |
 | `Key not authorized in Dex` | Check fingerprint matches Dex config |
 | `User not found in Dex` | Set username: `kubectl-ssh-oidc https://dex.example.com kubectl-ssh-oidc your-username` or `export KUBECTL_SSH_USER=your-username` |
 | `Passphrase prompt fails` | Ensure TTY available or use unencrypted keys |

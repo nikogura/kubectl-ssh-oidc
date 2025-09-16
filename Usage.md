@@ -207,7 +207,7 @@ users:
 - name: ssh-oidc-user
   user:
     exec:
-      apiVersion: client.authentication.k8s.io/v1beta1
+      apiVersion: client.authentication.k8s.io/v1
       command: kubectl-ssh_oidc
       args:
       - "https://dex.example.com"  # Dex URL
@@ -230,7 +230,7 @@ users:
 - name: ssh-oidc-user
   user:
     exec:
-      apiVersion: client.authentication.k8s.io/v1beta1
+      apiVersion: client.authentication.k8s.io/v1
       command: kubectl-ssh_oidc
       env:
       - name: DEX_URL
