@@ -23,7 +23,7 @@ import (
 	"golang.org/x/crypto/ssh/agent"
 	"golang.org/x/term"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	clientauthv1beta1 "k8s.io/client-go/pkg/apis/clientauthentication/v1beta1"
+	clientauthv1 "k8s.io/client-go/pkg/apis/clientauthentication/v1"
 )
 
 // Constants for commonly used values.
@@ -813,12 +813,12 @@ func OutputExecCredential(token string, expiresIn int) error {
 	}
 
 	// Create exec credential
-	cred := &clientauthv1beta1.ExecCredential{
+	cred := &clientauthv1.ExecCredential{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "client.authentication.k8s.io/v1beta1",
+			APIVersion: "client.authentication.k8s.io/v1",
 			Kind:       "ExecCredential",
 		},
-		Status: &clientauthv1beta1.ExecCredentialStatus{
+		Status: &clientauthv1.ExecCredentialStatus{
 			Token:               token,
 			ExpirationTimestamp: expiration,
 		},

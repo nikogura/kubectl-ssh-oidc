@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
-	clientauthv1beta1 "k8s.io/client-go/pkg/apis/clientauthentication/v1beta1"
+	clientauthv1 "k8s.io/client-go/pkg/apis/clientauthentication/v1"
 
 	"github.com/nikogura/kubectl-ssh-oidc/pkg/kubectl/mocks"
 	"github.com/nikogura/kubectl-ssh-oidc/testdata"
@@ -531,11 +531,11 @@ func TestOutputExecCredential(t *testing.T) {
 			output := buf.String()
 
 			// Parse the output as ExecCredential
-			var cred clientauthv1beta1.ExecCredential
+			var cred clientauthv1.ExecCredential
 			err = json.Unmarshal([]byte(output), &cred)
 			require.NoError(t, err)
 
-			assert.Equal(t, "client.authentication.k8s.io/v1beta1", cred.APIVersion)
+			assert.Equal(t, "client.authentication.k8s.io/v1", cred.APIVersion)
 			assert.Equal(t, "ExecCredential", cred.Kind)
 			assert.Equal(t, tt.token, cred.Status.Token)
 
