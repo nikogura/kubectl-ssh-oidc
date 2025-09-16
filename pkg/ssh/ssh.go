@@ -57,6 +57,7 @@ type SSHConnector struct {
 	config     Config
 	logger     interface{}
 	signingKey *rsa.PrivateKey // Dex's actual RSA signing key
+	keyID      string          // Dex's signing key ID for JWT header
 }
 
 // Open creates a new SSH connector.
@@ -408,15 +409,21 @@ func (c *SSHConnector) generateRSASignedTokens(identity connector.Identity) (str
 	// Use RS256 signing method (RSA with SHA-256)
 	signingMethod := jwt.SigningMethodRS256
 
-	// Generate access token
+	// Generate access token with proper kid header
 	accessToken := jwt.NewWithClaims(signingMethod, accessClaims)
+	if c.keyID != "" {
+		accessToken.Header["kid"] = c.keyID
+	}
 	accessTokenString, err := accessToken.SignedString(signingKey)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to sign access token: %w", err)
 	}
 
-	// Generate ID token
+	// Generate ID token with proper kid header
 	idToken := jwt.NewWithClaims(signingMethod, idClaims)
+	if c.keyID != "" {
+		idToken.Header["kid"] = c.keyID
+	}
 	idTokenString, err := idToken.SignedString(signingKey)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to sign ID token: %w", err)
@@ -466,11 +473,14 @@ func (c *SSHConnector) SetSigningKeyFromInterface(key interface{}) error {
 	switch k := key.(type) {
 	case *rsa.PrivateKey:
 		c.signingKey = k
+		// No key ID available for raw RSA keys
+		c.keyID = ""
 		return nil
 	case *jose.JSONWebKey:
 		// Extract RSA private key from JOSE key
 		if rsaKey, ok := k.Key.(*rsa.PrivateKey); ok {
 			c.signingKey = rsaKey
+			c.keyID = k.KeyID // Store the key ID for JWT headers
 			return nil
 		}
 		return fmt.Errorf("JSONWebKey does not contain RSA private key, got: %T", k.Key)
