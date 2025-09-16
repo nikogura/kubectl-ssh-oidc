@@ -65,7 +65,7 @@ build_dex_image() {
     cd "$PROJECT_ROOT"
     
     # Build the image using our Dockerfile with repository root as context
-    docker build -f docker/dex/Dockerfile -t kubectl-ssh-oidc/dex:latest .
+    docker build -f docker/integration-testing/Dockerfile -t kubectl-ssh-oidc/dex:latest .
     
     echo -e "${GREEN}✅ Custom Dex image built successfully${NC}"
     

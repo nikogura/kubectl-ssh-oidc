@@ -228,10 +228,29 @@ connectors:
 
 ### 5. Deploy Custom Dex with SSH Connector
 
-The SSH connector is included in this repository in the `pkg/ssh` package and acts as a Dex connector. The integration has been tested and validated with Dex v2.39.1. To use it:
+The SSH connector is included in this repository in the `pkg/ssh` package and acts as a Dex connector. The integration has been tested and validated with Dex v2.39.1.
+
+#### Option A: Docker Build (Recommended)
+
+Use the provided Docker setup to build a custom Dex image:
 
 ```bash
-# Build a custom Dex with the SSH connector
+# Production builds (for deployment)
+cd docker/production
+make CONTAINER_REGISTRY=your-registry.com build push
+
+# Integration testing builds (for development)
+docker build -f docker/integration-testing/Dockerfile -t dex-test:latest .
+
+# Use with specific versions
+make DEX_VERSION=v2.39.1 KUBECTL_SSH_OIDC_VERSION=v0.1.0 build
+```
+
+See [`docker/README.md`](docker/README.md) for detailed Docker build instructions.
+
+#### Option B: Manual Build
+
+```bash
 # 1. Clone Dex repository
 git clone https://github.com/dexidp/dex
 cd dex
@@ -433,6 +452,15 @@ kubectl-ssh-oidc/
 │   │   └── mocks/            # Mock objects for testing
 │   └── ssh/                  # Dex SSH connector implementation
 │       └── mocks/            # SSH connector mocks
+├── docker/                   # Docker builds for custom Dex with SSH connector
+│   ├── production/           # Production-ready builds from GitHub releases
+│   │   ├── Dockerfile        # Self-contained multi-stage build
+│   │   ├── Makefile          # Multi-registry build automation
+│   │   └── README.md         # Production build documentation
+│   ├── integration-testing/  # Development builds using local source
+│   │   ├── Dockerfile        # Local source integration build
+│   │   └── README.md         # Integration testing documentation
+│   └── README.md             # Docker build overview and guidance
 ├── testdata/                 # Test helper functions
 ├── integration_test.go       # End-to-end integration tests
 ├── Makefile                  # Build automation

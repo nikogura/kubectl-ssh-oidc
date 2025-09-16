@@ -93,7 +93,7 @@ test-all: test lint test-integration
 .PHONY: build-dex
 build-dex:
 	@echo "Building custom Dex image with SSH connector..."
-	docker build -f docker/dex/Dockerfile -t kubectl-ssh-oidc/dex:latest docker/dex/
+	docker build -f docker/integration-testing/Dockerfile -t kubectl-ssh-oidc/dex:latest .
 
 # Verify custom Dex image works correctly
 .PHONY: verify-dex

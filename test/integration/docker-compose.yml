@@ -5,7 +5,7 @@ services:
   dex:
     build:
       context: ../../
-      dockerfile: docker/dex/Dockerfile
+      dockerfile: docker/integration-testing/Dockerfile
     image: kubectl-ssh-oidc/dex:latest
     ports:
       - "5556:5556"
