@@ -14,8 +14,9 @@ RUN git clone --depth=1 --branch=${DEX_VERSION} https://github.com/dexidp/dex.gi
 # Create SSH connector directory
 RUN mkdir -p dex/connector/ssh
 
-# Copy SSH connector with Dex-compatible interface
+# Copy SSH connector with Dex-compatible interface and version info
 COPY pkg/ssh/ssh.go dex/connector/ssh/ssh.go
+COPY pkg/ssh/version.go dex/connector/ssh/version.go
 
 # Patch SSH connector for Dex v2.39.1+ compatibility
 RUN cd dex/connector/ssh && \
@@ -82,9 +83,10 @@ RUN cd dex && \
     go mod edit -require github.com/go-jose/go-jose/v4@v4.0.1 && \
     go mod tidy
 
-# Build Dex with SSH connector
+# Build Dex with SSH connector and version injection
 RUN cd dex && \
-    CGO_ENABLED=1 make build
+    LDFLAGS="-X github.com/dexidp/dex/connector/ssh.Version=local" && \
+    CGO_ENABLED=1 go build -ldflags "${LDFLAGS}" -o bin/dex ./cmd/dex
 
 # Runtime image
 FROM alpine:3.19

@@ -65,6 +65,17 @@ type SSHConnector struct {
 // - Newer versions (v2.39.1+) use log.Logger
 // When integrating with newer Dex versions, cast logger to log.Logger as needed.
 func (c *Config) Open(id string, logger interface{}) (connector.Connector, error) {
+	// Log version information when SSH connector starts up
+	version := GetVersion()
+
+	// Try to log using different logger interfaces for compatibility
+	if dexLogger, ok := logger.(interface{ Infof(string, ...interface{}) }); ok {
+		dexLogger.Infof("SSH connector starting - version: %s", version)
+	} else {
+		// Fallback: use fmt if logger interface is not available
+		fmt.Printf("SSH connector starting - version: %s\n", version)
+	}
+
 	return &SSHConnector{
 		config: *c,
 		logger: logger,
