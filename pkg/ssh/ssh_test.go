@@ -242,3 +242,207 @@ func TestSSHConnector_SetSigningKeyFromInterface(t *testing.T) {
 		assert.Contains(t, setErr.Error(), "unsupported key type: string")
 	})
 }
+
+func TestSSHConnector_isKeyMatch(t *testing.T) {
+	config := &Config{}
+	conn, err := config.Open("test", nil)
+	require.NoError(t, err)
+	sshConnector := conn.(*SSHConnector)
+
+	// Generate a test SSH key
+	testKeys, err := testdata.GenerateSSHKeysForTest()
+	require.NoError(t, err)
+	require.Len(t, testKeys, 3)
+
+	// Get the first key for testing
+	testKey := testKeys[0]
+	expectedFingerprint := testKey.Fingerprint
+
+	// Test public key content (should be in ssh-ed25519 AAAAC3... format)
+	publicKeyContent := string(testKey.PublicKeyBytes)
+
+	t.Run("fingerprint_format_exact_match", func(t *testing.T) {
+		// Test exact fingerprint match
+		result := sshConnector.isKeyMatch(expectedFingerprint, expectedFingerprint)
+		assert.True(t, result, "Fingerprint should match itself")
+	})
+
+	t.Run("fingerprint_format_no_match", func(t *testing.T) {
+		// Test fingerprint that doesn't match
+		differentFingerprint := "SHA256:differentfingerprintvalue"
+		result := sshConnector.isKeyMatch(differentFingerprint, expectedFingerprint)
+		assert.False(t, result, "Different fingerprints should not match")
+	})
+
+	t.Run("public_key_format_match", func(t *testing.T) {
+		// Test full public key format that should generate matching fingerprint
+		result := sshConnector.isKeyMatch(publicKeyContent, expectedFingerprint)
+		assert.True(t, result, "Public key should match its fingerprint")
+	})
+
+	t.Run("public_key_format_no_match", func(t *testing.T) {
+		// Use a different key's public key content
+		differentKey := testKeys[1]
+		differentPublicKeyContent := string(differentKey.PublicKeyBytes)
+
+		result := sshConnector.isKeyMatch(differentPublicKeyContent, expectedFingerprint)
+		assert.False(t, result, "Different public key should not match fingerprint")
+	})
+
+	t.Run("invalid_public_key_format", func(t *testing.T) {
+		// Test invalid public key format falls back to string comparison
+		invalidPublicKey := "invalid-ssh-key-format"
+		result := sshConnector.isKeyMatch(invalidPublicKey, expectedFingerprint)
+		assert.False(t, result, "Invalid public key should not match")
+
+		// But it should match itself (fallback comparison)
+		result = sshConnector.isKeyMatch(invalidPublicKey, invalidPublicKey)
+		assert.True(t, result, "Invalid format should match itself via fallback")
+	})
+
+	t.Run("mixed_format_scenarios", func(t *testing.T) {
+		// Test various mixed scenarios
+		scenarios := []struct {
+			name          string
+			authorizedKey string
+			presentedKey  string
+			expectedMatch bool
+		}{
+			{
+				name:          "fingerprint_matches_fingerprint",
+				authorizedKey: expectedFingerprint,
+				presentedKey:  expectedFingerprint,
+				expectedMatch: true,
+			},
+			{
+				name:          "public_key_matches_fingerprint",
+				authorizedKey: publicKeyContent,
+				presentedKey:  expectedFingerprint,
+				expectedMatch: true,
+			},
+			{
+				name:          "fingerprint_matches_same_fingerprint",
+				authorizedKey: expectedFingerprint,
+				presentedKey:  expectedFingerprint,
+				expectedMatch: true,
+			},
+			{
+				name:          "different_fingerprints",
+				authorizedKey: "SHA256:different1",
+				presentedKey:  "SHA256:different2",
+				expectedMatch: false,
+			},
+		}
+
+		for _, scenario := range scenarios {
+			t.Run(scenario.name, func(t *testing.T) {
+				result := sshConnector.isKeyMatch(scenario.authorizedKey, scenario.presentedKey)
+				assert.Equal(t, scenario.expectedMatch, result,
+					"Scenario %s failed: authorized=%s, presented=%s",
+					scenario.name, scenario.authorizedKey, scenario.presentedKey)
+			})
+		}
+	})
+}
+
+func TestSSHConnector_findUserByUsernameAndKey_BothFormats(t *testing.T) {
+	// Generate test SSH keys
+	testKeys, err := testdata.GenerateSSHKeysForTest()
+	require.NoError(t, err)
+	require.Len(t, testKeys, 3)
+
+	key1Fingerprint := testKeys[0].Fingerprint
+	key1PublicKey := string(testKeys[0].PublicKeyBytes)
+	key2Fingerprint := testKeys[1].Fingerprint
+	key2PublicKey := string(testKeys[1].PublicKeyBytes)
+
+	// Create config with mixed key formats
+	config := &Config{
+		Users: map[string]UserConfig{
+			"user-with-fingerprints": {
+				Keys: []string{
+					key1Fingerprint, // SHA256:... format
+					key2Fingerprint, // SHA256:... format
+				},
+				UserInfo: UserInfo{
+					Username: "user-with-fingerprints",
+					Email:    "fingerprints@example.com",
+					Groups:   []string{"fingerprint-users"},
+				},
+			},
+			"user-with-public-keys": {
+				Keys: []string{
+					key1PublicKey, // ssh-ed25519 AAAAC3... format
+					key2PublicKey, // ssh-ed25519 AAAAC3... format
+				},
+				UserInfo: UserInfo{
+					Username: "user-with-public-keys",
+					Email:    "publickeys@example.com",
+					Groups:   []string{"public-key-users"},
+				},
+			},
+			"user-with-mixed-keys": {
+				Keys: []string{
+					key1Fingerprint, // SHA256:... format
+					key2PublicKey,   // ssh-ed25519 AAAAC3... format
+				},
+				UserInfo: UserInfo{
+					Username: "user-with-mixed-keys",
+					Email:    "mixed@example.com",
+					Groups:   []string{"mixed-users"},
+				},
+			},
+		},
+	}
+
+	conn, err := config.Open("test", nil)
+	require.NoError(t, err)
+	sshConnector := conn.(*SSHConnector)
+
+	t.Run("fingerprint_user_matches_fingerprint", func(t *testing.T) {
+		userInfo, findErr := sshConnector.findUserByUsernameAndKey("user-with-fingerprints", key1Fingerprint)
+		require.NoError(t, findErr)
+		assert.Equal(t, "user-with-fingerprints", userInfo.Username)
+		assert.Equal(t, "fingerprints@example.com", userInfo.Email)
+		assert.Contains(t, userInfo.Groups, "fingerprint-users")
+	})
+
+	t.Run("public_key_user_matches_fingerprint", func(t *testing.T) {
+		userInfo, findErr := sshConnector.findUserByUsernameAndKey("user-with-public-keys", key1Fingerprint)
+		require.NoError(t, findErr)
+		assert.Equal(t, "user-with-public-keys", userInfo.Username)
+		assert.Equal(t, "publickeys@example.com", userInfo.Email)
+		assert.Contains(t, userInfo.Groups, "public-key-users")
+	})
+
+	t.Run("mixed_user_matches_fingerprint_key", func(t *testing.T) {
+		// Should match the fingerprint in the mixed config
+		userInfo, findErr := sshConnector.findUserByUsernameAndKey("user-with-mixed-keys", key1Fingerprint)
+		require.NoError(t, findErr)
+		assert.Equal(t, "user-with-mixed-keys", userInfo.Username)
+		assert.Equal(t, "mixed@example.com", userInfo.Email)
+		assert.Contains(t, userInfo.Groups, "mixed-users")
+	})
+
+	t.Run("mixed_user_matches_public_key", func(t *testing.T) {
+		// Should match the public key in the mixed config
+		userInfo, findErr := sshConnector.findUserByUsernameAndKey("user-with-mixed-keys", key2Fingerprint)
+		require.NoError(t, findErr)
+		assert.Equal(t, "user-with-mixed-keys", userInfo.Username)
+		assert.Equal(t, "mixed@example.com", userInfo.Email)
+		assert.Contains(t, userInfo.Groups, "mixed-users")
+	})
+
+	t.Run("no_match_wrong_user", func(t *testing.T) {
+		_, findErr := sshConnector.findUserByUsernameAndKey("nonexistent-user", key1Fingerprint)
+		require.Error(t, findErr)
+		assert.Contains(t, findErr.Error(), "user nonexistent-user not found")
+	})
+
+	t.Run("no_match_wrong_key", func(t *testing.T) {
+		unknownFingerprint := "SHA256:unknown-key-fingerprint"
+		_, findErr := sshConnector.findUserByUsernameAndKey("user-with-fingerprints", unknownFingerprint)
+		require.Error(t, findErr)
+		assert.Contains(t, findErr.Error(), "key "+unknownFingerprint+" not authorized for user user-with-fingerprints")
+	})
+}

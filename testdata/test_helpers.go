@@ -120,3 +120,37 @@ func TestPublicKey2() (ssh.PublicKey, error) {
 	publicKey, _, _, err := GenerateTestSSHKey()
 	return publicKey, err
 }
+
+// TestSSHKey represents a test SSH key with its data.
+type TestSSHKey struct {
+	PublicKey       ssh.PublicKey
+	Signer          ssh.Signer
+	PublicKeyBytes  []byte
+	Fingerprint     string
+}
+
+// GenerateSSHKeysForTest generates multiple test SSH keys for testing both formats.
+func GenerateSSHKeysForTest() ([]TestSSHKey, error) {
+	var keys []TestSSHKey
+
+	// Generate 3 test keys
+	for i := 0; i < 3; i++ {
+		publicKey, signer, _, err := GenerateTestSSHKey()
+		if err != nil {
+			return nil, err
+		}
+
+		fingerprint := ssh.FingerprintSHA256(publicKey)
+		// Format as proper SSH public key string
+		publicKeyString := string(ssh.MarshalAuthorizedKey(publicKey))
+
+		keys = append(keys, TestSSHKey{
+			PublicKey:      publicKey,
+			Signer:         signer,
+			PublicKeyBytes: []byte(publicKeyString),
+			Fingerprint:    fingerprint,
+		})
+	}
+
+	return keys, nil
+}

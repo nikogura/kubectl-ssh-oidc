@@ -38,8 +38,8 @@ The Dockerfile creates a custom Dex image that:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DEX_VERSION` | `v2.39.1` | Dex version to build against |
-| `KUBECTL_SSH_OIDC_VERSION` | `0.1.0` | kubectl-ssh-oidc version for SSH connector |
+| `DEX_VERSION` | **Auto-detected from GitHub** | Dex version to build against |
+| `KUBECTL_SSH_OIDC_VERSION` | **Auto-detected from GitHub** | kubectl-ssh-oidc version for SSH connector |
 | `IMAGE_NAME` | `dex-ssh-oidc` | Local image name |
 | `CONTAINER_REGISTRY` | (none) | Target registry for push operations |
 
@@ -64,12 +64,15 @@ make CONTAINER_REGISTRY=gcr.io/your-project-id
 
 ## 🔧 Advanced Usage
 
-### Custom Versions
+### Version Detection and Override
 ```bash
-# Build with latest Dex version
-make DEX_VERSION=latest build
+# Check what versions will be used (auto-detected from GitHub)
+make versions
 
-# Build with specific versions
+# Get build information (shows detected versions)
+make info
+
+# Override with specific versions
 make DEX_VERSION=v2.40.0 KUBECTL_SSH_OIDC_VERSION=v0.2.0 build
 
 # Build from development branch
@@ -78,6 +81,9 @@ make KUBECTL_SSH_OIDC_VERSION=main build
 
 ### Development Workflow
 ```bash
+# Check version detection
+make versions
+
 # Get build information
 make info
 
@@ -129,7 +135,7 @@ spec:
 
 ## 📋 SSH Connector Configuration
 
-Add the SSH connector to your Dex configuration:
+The SSH connector supports **both SSH key formats**. Add the SSH connector to your Dex configuration:
 
 ```yaml
 # dex-config.yaml
@@ -148,12 +154,26 @@ connectors:
     users:
       "john.doe":
         keys:
+        # Format 1: SSH fingerprints (recommended)
         - "SHA256:anwBv8OdPTZNsC3Und/btMdqxE71uYUugjkztuUhLH0"
+        # Format 2: Full SSH public keys (also supported)
+        - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample... john@hostname"
+        - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC9Uxzcz0x... john@hostname"
         username: "john.doe"
         email: "john.doe@example.com"
         groups:
         - "developers"
         - "kubernetes-users"
+
+      "jane.smith":
+        keys:
+        # You can mix both formats in the same user configuration
+        - "SHA256:7B2+8jXTyF9qK5mPvN3wR8sH6uY4oL1cE5gF2nA7bX0"  # Fingerprint
+        - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAnother... jane@hostname"  # Full key
+        username: "jane.smith"
+        email: "jane.smith@example.com"
+        groups:
+        - "developers"
 
     allowed_issuers:
     - "kubectl-ssh-oidc"
@@ -166,6 +186,12 @@ connectors:
 
     token_ttl: 3600
 ```
+
+### SSH Key Format Notes
+- ✅ **SSH Fingerprints**: `SHA256:...` format (recommended for brevity)
+- ✅ **Full Public Keys**: Complete `.pub` file content (easier to copy-paste)
+- ✅ **Mixed Configuration**: Both formats can be used for the same user
+- ✅ **Optional Comments**: SSH public key comment field (user@hostname) is optional
 
 ## 🔒 Security Considerations
 

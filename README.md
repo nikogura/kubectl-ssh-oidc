@@ -127,9 +127,12 @@ export SSH_USE_AGENT=false  # Disable agent, use only filesystem
 export SSH_USE_AGENT=true   # Default: true
 ```
 
-### 2. Get SSH Key Fingerprints
+### 2. Get SSH Key Information for Dex Configuration
 
-You need SSH key fingerprints for the Dex configuration. Use standard SSH tooling:
+The SSH connector supports **two key formats** in Dex configuration. You can use either or both:
+
+#### Format 1: SSH Fingerprints (Recommended)
+Use SSH fingerprints for the Dex configuration. Use standard SSH tooling:
 
 ```bash
 # For any public key file (most common method)
@@ -157,6 +160,27 @@ ssh-keygen -lf /path/to/your/key.pub
 # Or use make target to show all available fingerprints
 make ssh-fingerprints
 ```
+
+#### Format 2: Full SSH Public Keys (Also Supported)
+Alternatively, you can use the complete public key content from your `.pub` files:
+
+```bash
+# Copy the entire content of your public key file
+cat ~/.ssh/id_ed25519.pub
+cat ~/.ssh/id_rsa.pub
+```
+
+**Example output:**
+```
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKj8v5Z2b7N4T... user@hostname
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC9Uxzcz0x... user@hostname
+```
+
+**Notes about SSH public key format:**
+- ✅ Algorithm and key data are required: `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5...`
+- ✅ Comment/hostname is optional: `ssh-ed25519 AAAAC3... user@hostname` or just `ssh-ed25519 AAAAC3...`
+- ✅ Both formats can be mixed in the same user configuration
+- ✅ The connector automatically handles conversion between formats
 
 ### 3. Generate Client Credentials
 
@@ -188,24 +212,28 @@ connectors:
   id: ssh
   name: SSH Key Authentication
   config:
-    # Multiple keys per user
+    # Multiple keys per user - SUPPORTS BOTH FORMATS
     users:
       "john.doe":
         keys:
+        # Format 1: SSH fingerprints (recommended)
         - "SHA256:anwBv8OdPTZNsC3Und/btMdqxE71uYUugjkztuUhLH0"
-        - "SHA256:LzKNhWlSG7V7z3nhebyilCadN10jF6mNX6StO8FZ1iM" 
-        - "SHA256:4wMtClwjjbq6znF1DhoRTijpisje/QNkdfujTrNT8NE"
+        - "SHA256:LzKNhWlSG7V7z3nhebyilCadN10jF6mNX6StO8FZ1iM"
+        # Format 2: Full SSH public keys (also supported)
+        - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample... user@hostname"
+        - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC9Uxzcz0x... user@hostname"
         username: "john.doe"
         email: "john.doe@example.com"
         full_name: "John Doe"
         groups:
         - "developers"
         - "kubernetes-users"
-      
+
       "jane.smith":
         keys:
-        - "SHA256:7B2+8jXTyF9qK5mPvN3wR8sH6uY4oL1cE5gF2nA7bX0"
-        - "SHA256:nRXBUAkAt6GX8/eVtjWQLmtdsAR6s6Voe92DF7JRWJk"
+        # You can mix both formats in the same user configuration
+        - "SHA256:7B2+8jXTyF9qK5mPvN3wR8sH6uY4oL1cE5gF2nA7bX0"  # Fingerprint format
+        - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAnother... jane@hostname"  # Full public key format
         username: "jane.smith"
         email: "jane.smith@example.com"
         full_name: "Jane Smith"

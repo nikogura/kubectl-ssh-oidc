@@ -24,6 +24,7 @@ docker/
 ✅ **Advantages:**
 - Fully self-contained (no local source needed)
 - Builds from stable GitHub releases
+- **Auto-detects latest versions** from GitHub API
 - Multi-registry support (Docker Hub, ECR, GCR, etc.)
 - Automated build system with Makefile
 - Version-controlled and reproducible
@@ -76,6 +77,7 @@ docker build -f docker/integration-testing/Dockerfile -t test-dex .
 
 Both builds create Dex images with:
 - **SSH Connector**: Integrated from kubectl-ssh-oidc
+- **Dual Key Formats**: Support for both SSH fingerprints and full public keys
 - **Multiple Keys**: Support for signing key iteration
 - **Direct Endpoints**: `/auth/ssh/token` for direct token exchange
 - **Security**: Non-root user, minimal Alpine base
@@ -91,6 +93,7 @@ Both builds create Dex images with:
 | Feature | Production | Integration Testing |
 |---------|------------|-------------------|
 | **Source** | GitHub releases | Local project files |
+| **Version Detection** | Auto-detects latest from GitHub | Uses local version |
 | **Build Context** | Standalone | Requires project root |
 | **Registry Support** | Multi-registry | Local only |
 | **Use Case** | Deployment | Development/Testing |

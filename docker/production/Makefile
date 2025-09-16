@@ -1,6 +1,14 @@
-# Build variables - customize these for your environment
-DEX_VERSION ?= v2.39.1
-KUBECTL_SSH_OIDC_VERSION ?= 0.1.0
+# Build variables - defaults to latest versions from GitHub
+# Can be overridden via environment variables: make DEX_VERSION=v2.40.0 KUBECTL_SSH_OIDC_VERSION=v0.2.0 build
+
+# Function to get latest GitHub release tag
+define get_latest_release
+$(shell curl -s https://api.github.com/repos/$(1)/releases/latest | jq -r '.tag_name // "$(2)"' 2>/dev/null || echo "$(2)")
+endef
+
+# Default to latest releases from GitHub, with fallbacks
+DEX_VERSION ?= $(call get_latest_release,dexidp/dex,v2.39.1)
+KUBECTL_SSH_OIDC_VERSION ?= $(call get_latest_release,nikogura/kubectl-ssh-oidc,0.1.0)
 
 # Container registry settings - customize for your registry
 # Examples:
@@ -23,14 +31,10 @@ else
 	REMOTE_IMAGE_TAG = $(LOCAL_IMAGE_TAG)
 endif
 
-# Resolve actual Dex version for 'latest'
-ifeq ($(DEX_VERSION),latest)
-	ACTUAL_DEX_VERSION := $(shell curl -s https://api.github.com/repos/dexidp/dex/releases/latest | jq -r '.tag_name // "v2.39.1"' 2>/dev/null || echo "v2.39.1")
-else
-	ACTUAL_DEX_VERSION := $(DEX_VERSION)
-endif
+# Use detected versions directly (already resolved from GitHub API or fallback)
+ACTUAL_DEX_VERSION := $(DEX_VERSION)
 
-.PHONY: build tag push info clean help check-registry
+.PHONY: build tag push info clean help check-registry versions
 
 # Default target
 build: info
@@ -54,8 +58,8 @@ push: tag
 
 info:
 	@echo "=== Build Configuration ==="
-	@echo "Dex version: $(DEX_VERSION) -> $(ACTUAL_DEX_VERSION)"
-	@echo "kubectl-ssh-oidc version: $(KUBECTL_SSH_OIDC_VERSION)"
+	@echo "Dex version: $(ACTUAL_DEX_VERSION) (auto-detected from GitHub)"
+	@echo "kubectl-ssh-oidc version: $(KUBECTL_SSH_OIDC_VERSION) (auto-detected from GitHub)"
 	@echo "Local image tag: $(LOCAL_IMAGE_TAG)"
 	@echo "Remote image tag: $(REMOTE_IMAGE_TAG)"
 ifdef CONTAINER_REGISTRY
@@ -63,7 +67,22 @@ ifdef CONTAINER_REGISTRY
 else
 	@echo "Container registry: <not set - local builds only>"
 endif
+	@echo "Note: Set DEX_VERSION and/or KUBECTL_SSH_OIDC_VERSION env vars to override auto-detection"
 	@echo
+
+versions:
+	@echo "=== Version Detection ==="
+	@echo "Auto-detecting latest versions from GitHub..."
+	@echo
+	@echo "Dex latest release:"
+	@curl -s https://api.github.com/repos/dexidp/dex/releases/latest | jq -r '.tag_name // "Unable to detect"' 2>/dev/null || echo "Unable to detect (jq required)"
+	@echo
+	@echo "kubectl-ssh-oidc latest release:"
+	@curl -s https://api.github.com/repos/nikogura/kubectl-ssh-oidc/releases/latest | jq -r '.tag_name // "Unable to detect"' 2>/dev/null || echo "Unable to detect (jq required)"
+	@echo
+	@echo "Currently configured versions:"
+	@echo "  DEX_VERSION=$(DEX_VERSION)"
+	@echo "  KUBECTL_SSH_OIDC_VERSION=$(KUBECTL_SSH_OIDC_VERSION)"
 
 check-registry:
 ifndef CONTAINER_REGISTRY
@@ -87,14 +106,22 @@ help:
 	@echo "  tag           - Build and tag image for registry"
 	@echo "  push          - Build, tag, and push image to registry"
 	@echo "  info          - Show build configuration"
+	@echo "  versions      - Show version detection from GitHub"
 	@echo "  clean         - Remove built images"
 	@echo "  help          - Show this help message"
 	@echo
 	@echo "Configuration Variables:"
-	@echo "  DEX_VERSION              - Dex version to build (default: $(DEX_VERSION))"
-	@echo "  KUBECTL_SSH_OIDC_VERSION - kubectl-ssh-oidc version (default: $(KUBECTL_SSH_OIDC_VERSION))"
+	@echo "  DEX_VERSION              - Dex version to build (default: latest from GitHub)"
+	@echo "  KUBECTL_SSH_OIDC_VERSION - kubectl-ssh-oidc version (default: latest from GitHub)"
 	@echo "  IMAGE_NAME               - Local image name (default: $(IMAGE_NAME))"
 	@echo "  CONTAINER_REGISTRY       - Target registry for push (default: none)"
+	@echo
+	@echo "Version Detection:"
+	@echo "  The Makefile automatically detects the latest releases from GitHub."
+	@echo "  Current detected versions:"
+	@echo "    Dex: $(DEX_VERSION)"
+	@echo "    kubectl-ssh-oidc: $(KUBECTL_SSH_OIDC_VERSION)"
+	@echo "  Override with: make DEX_VERSION=v2.40.0 KUBECTL_SSH_OIDC_VERSION=v0.2.0 build"
 	@echo
 	@echo "Registry Examples:"
 	@echo "  Docker Hub:"

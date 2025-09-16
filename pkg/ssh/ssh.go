@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/dexidp/dex/connector"
@@ -41,7 +42,11 @@ type Config struct {
 
 // UserConfig contains a user's SSH keys and identity information.
 type UserConfig struct {
-	// Keys is a list of SSH key fingerprints authorized for this user
+	// Keys is a list of SSH keys authorized for this user.
+	// Supports both formats:
+	//   - SSH fingerprints: "SHA256:anwBv8OdPTZNsC3Und/btMdqxE71uYUugjkztuUhLH0"
+	//   - Full public keys: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample... user@host"
+	//     Note: Per SSH spec, the comment (user@host) part is optional
 	Keys []string `json:"keys"`
 
 	// UserInfo contains the user's identity information
@@ -281,12 +286,13 @@ func (c *SSHConnector) verifySSHSignature(token, signatureB64, format, publicKey
 
 // findUserByUsernameAndKey finds a user by username and verifies the key is authorized.
 // This provides O(1) lookup performance instead of searching all users.
+// Supports both SSH fingerprints and full public key formats.
 func (c *SSHConnector) findUserByUsernameAndKey(username, keyFingerprint string) (UserInfo, error) {
 	// First, check the new Users format (O(1) lookup)
 	if userConfig, exists := c.config.Users[username]; exists {
 		// Check if this key is authorized for this user
 		for _, authorizedKey := range userConfig.Keys {
-			if authorizedKey == keyFingerprint {
+			if c.isKeyMatch(authorizedKey, keyFingerprint) {
 				// Return the user info with username filled in if not already set
 				userInfo := userConfig.UserInfo
 				if userInfo.Username == "" {
@@ -299,6 +305,29 @@ func (c *SSHConnector) findUserByUsernameAndKey(username, keyFingerprint string)
 	}
 
 	return UserInfo{}, fmt.Errorf("user %s not found or key %s not authorized", username, keyFingerprint)
+}
+
+// isKeyMatch checks if an authorized key (from config) matches the presented key fingerprint.
+// Supports both formats in the config:
+//   - SSH fingerprints: "SHA256:anwBv8OdPTZNsC3Und/btMdqxE71uYUugjkztuUhLH0"
+//   - Full public keys: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample... user@host"
+//     Note: Per SSH spec, the comment (user@host) part is optional
+func (c *SSHConnector) isKeyMatch(authorizedKey, presentedKeyFingerprint string) bool {
+	// If the authorized key is already a fingerprint (starts with SHA256:), direct comparison
+	if strings.HasPrefix(authorizedKey, "SHA256:") {
+		return authorizedKey == presentedKeyFingerprint
+	}
+
+	// If the authorized key is a full public key, parse it and generate its fingerprint
+	publicKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(authorizedKey))
+	if err != nil {
+		// Invalid public key format, try as-is comparison (fallback)
+		return authorizedKey == presentedKeyFingerprint
+	}
+
+	// Generate fingerprint from the public key and compare
+	authorizedKeyFingerprint := ssh.FingerprintSHA256(publicKey)
+	return authorizedKeyFingerprint == presentedKeyFingerprint
 }
 
 // isAllowedIssuer checks if the JWT issuer is allowed.
