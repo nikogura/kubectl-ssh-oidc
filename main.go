@@ -49,7 +49,16 @@ func main() {
 	}
 
 	// Output kubectl exec credential with server-generated OIDC token
-	credErr := kubectl.OutputExecCredential(token, tokenResp.ExpiresIn)
+	var execCredSpec *clientauthv1.ExecCredentialSpec
+	if execInfo != "" {
+		var execCredential clientauthv1.ExecCredential
+		unmarshalErr := json.Unmarshal([]byte(execInfo), &execCredential)
+		if unmarshalErr == nil {
+			execCredSpec = &execCredential.Spec
+		}
+	}
+
+	credErr := kubectl.OutputExecCredentialWithSpec(token, tokenResp.ExpiresIn, execCredSpec)
 	if credErr != nil {
 		fmt.Fprintf(os.Stderr, "Failed to output credential: %v\n", credErr)
 		os.Exit(1)

@@ -237,7 +237,7 @@ connectors:
     default_groups:
     - "authenticated"
     
-    token_ttl: 3600
+    token_ttl: 3600  # Optional: Token lifetime in seconds (defaults to 3600 if not specified)
 ```
 
 ### 5. Deploy Custom Dex with SSH Connector

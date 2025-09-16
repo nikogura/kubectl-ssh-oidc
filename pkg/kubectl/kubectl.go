@@ -918,6 +918,11 @@ func getSystemUsername() string {
 
 // OutputExecCredential outputs the kubectl exec credential.
 func OutputExecCredential(token string, expiresIn int) error {
+	return OutputExecCredentialWithSpec(token, expiresIn, nil)
+}
+
+// OutputExecCredentialWithSpec outputs the kubectl exec credential with the specified spec.
+func OutputExecCredentialWithSpec(token string, expiresIn int, spec *clientauthv1.ExecCredentialSpec) error {
 	// Calculate expiration time
 	var expiration *metav1.Time
 	if expiresIn > 0 {
@@ -935,6 +940,11 @@ func OutputExecCredential(token string, expiresIn int) error {
 			Token:               token,
 			ExpirationTimestamp: expiration,
 		},
+	}
+
+	// Set the spec if provided
+	if spec != nil {
+		cred.Spec = *spec
 	}
 
 	// Output as JSON

@@ -30,7 +30,7 @@ type Config struct {
 	// DefaultGroups are assigned to all authenticated users
 	DefaultGroups []string `json:"default_groups"`
 
-	// TokenTTL specifies how long tokens are valid (in seconds)
+	// TokenTTL specifies how long tokens are valid (in seconds, defaults to 3600 if 0)
 	TokenTTL int `json:"token_ttl"`
 
 	// AllowedClients specifies which OAuth2 client IDs are allowed to use this connector
@@ -80,8 +80,14 @@ func (c *Config) Open(id string, logger interface{}) (connector.Connector, error
 		fmt.Printf("SSH connector starting - version: %s\n", version)
 	}
 
+	// Set default values if not configured
+	config := *c
+	if config.TokenTTL == 0 {
+		config.TokenTTL = 3600 // Default to 1 hour
+	}
+
 	return &SSHConnector{
-		config: *c,
+		config: config,
 		logger: logger,
 	}, nil
 }
