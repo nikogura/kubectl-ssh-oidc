@@ -265,7 +265,7 @@ Use the provided Docker setup to build a custom Dex image:
 ```bash
 # Production builds (for deployment)
 cd docker/production
-make CONTAINER_REGISTRY=your-registry.com build push
+make CONTAINER_REPO=your-registry.com/dex build push
 
 # Integration testing builds (for development)
 docker build -f docker/integration-testing/Dockerfile -t dex-test:latest .

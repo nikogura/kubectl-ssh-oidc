@@ -10,23 +10,22 @@ endef
 DEX_VERSION ?= $(call get_latest_release,dexidp/dex,v2.39.1)
 KUBECTL_SSH_OIDC_VERSION ?= $(call get_latest_release,nikogura/kubectl-ssh-oidc,0.1.0)
 
-# Container registry settings - customize for your registry
+# Container repository settings - customize for your repository
 # Examples:
-#   Docker Hub: CONTAINER_REGISTRY = your-dockerhub-username
-#   GitHub Container Registry: CONTAINER_REGISTRY = ghcr.io/your-github-username
-#   AWS ECR: CONTAINER_REGISTRY = 123456789012.dkr.ecr.us-west-2.amazonaws.com
-#   Azure ACR: CONTAINER_REGISTRY = yourregistry.azurecr.io
-#   Google GCR: CONTAINER_REGISTRY = gcr.io/your-project-id
-CONTAINER_REGISTRY ?=
+#   Docker Hub: CONTAINER_REPO = your-dockerhub-username/your-dex-repo
+#   GitHub Container Registry: CONTAINER_REPO = ghcr.io/your-github-username/your-dex-repo
+#   AWS ECR: CONTAINER_REPO = 123456789012.dkr.ecr.us-west-2.amazonaws.com/your-dex-repo
+#   Azure ACR: CONTAINER_REPO = yourregistry.azurecr.io/your-dex-repo
+#   Google GCR: CONTAINER_REPO = gcr.io/your-project-id/your-dex-repo
+CONTAINER_REPO ?=
 
-# Image naming
-IMAGE_NAME ?= dex-ssh-oidc
-IMAGE_TAG ?= $(DEX_VERSION)-kubectl-$(KUBECTL_SSH_OIDC_VERSION)
-LOCAL_IMAGE_TAG = $(IMAGE_NAME):$(IMAGE_TAG)
+# Image naming - tag format: <dex-version>-<kubectl-ssh-oidc-version>
+IMAGE_TAG ?= $(DEX_VERSION)-$(KUBECTL_SSH_OIDC_VERSION)
+LOCAL_IMAGE_TAG = dex:$(IMAGE_TAG)
 
-# Full container tag (only set if registry is specified)
-ifdef CONTAINER_REGISTRY
-	REMOTE_IMAGE_TAG = $(CONTAINER_REGISTRY)/$(LOCAL_IMAGE_TAG)
+# Full container tag (only set if repository is specified)
+ifdef CONTAINER_REPO
+	REMOTE_IMAGE_TAG = $(CONTAINER_REPO):$(IMAGE_TAG)
 else
 	REMOTE_IMAGE_TAG = $(LOCAL_IMAGE_TAG)
 endif
@@ -34,7 +33,7 @@ endif
 # Use detected versions directly (already resolved from GitHub API or fallback)
 ACTUAL_DEX_VERSION := $(DEX_VERSION)
 
-.PHONY: build tag push info clean help check-registry versions
+.PHONY: build tag push info clean help check-repo versions
 
 # Default target
 build: info
@@ -47,7 +46,7 @@ build: info
 		.
 	@echo "Build complete: $(LOCAL_IMAGE_TAG)"
 
-tag: build check-registry
+tag: build check-repo
 	@echo "Tagging $(LOCAL_IMAGE_TAG) -> $(REMOTE_IMAGE_TAG)"
 	docker tag $(LOCAL_IMAGE_TAG) $(REMOTE_IMAGE_TAG)
 
@@ -62,10 +61,10 @@ info:
 	@echo "kubectl-ssh-oidc version: $(KUBECTL_SSH_OIDC_VERSION) (auto-detected from GitHub)"
 	@echo "Local image tag: $(LOCAL_IMAGE_TAG)"
 	@echo "Remote image tag: $(REMOTE_IMAGE_TAG)"
-ifdef CONTAINER_REGISTRY
-	@echo "Container registry: $(CONTAINER_REGISTRY)"
+ifdef CONTAINER_REPO
+	@echo "Container repository: $(CONTAINER_REPO)"
 else
-	@echo "Container registry: <not set - local builds only>"
+	@echo "Container repository: <not set - local builds only>"
 endif
 	@echo "Note: Set DEX_VERSION and/or KUBECTL_SSH_OIDC_VERSION env vars to override auto-detection"
 	@echo
@@ -84,16 +83,16 @@ versions:
 	@echo "  DEX_VERSION=$(DEX_VERSION)"
 	@echo "  KUBECTL_SSH_OIDC_VERSION=$(KUBECTL_SSH_OIDC_VERSION)"
 
-check-registry:
-ifndef CONTAINER_REGISTRY
-	@echo "WARNING: CONTAINER_REGISTRY not set. Use 'make CONTAINER_REGISTRY=your-registry.com tag' to tag for remote registry."
-	@echo "See 'make help' for registry examples."
+check-repo:
+ifndef CONTAINER_REPO
+	@echo "WARNING: CONTAINER_REPO not set. Use 'make CONTAINER_REPO=your-registry.com/your-dex-repo tag' to tag for remote repository."
+	@echo "See 'make help' for repository examples."
 endif
 
 clean:
 	@echo "Cleaning up local images..."
 	-docker rmi $(LOCAL_IMAGE_TAG) 2>/dev/null || true
-ifdef CONTAINER_REGISTRY
+ifdef CONTAINER_REPO
 	-docker rmi $(REMOTE_IMAGE_TAG) 2>/dev/null || true
 endif
 	@echo "Cleanup complete"
@@ -113,8 +112,7 @@ help:
 	@echo "Configuration Variables:"
 	@echo "  DEX_VERSION              - Dex version to build (default: latest from GitHub)"
 	@echo "  KUBECTL_SSH_OIDC_VERSION - kubectl-ssh-oidc version (default: latest from GitHub)"
-	@echo "  IMAGE_NAME               - Local image name (default: $(IMAGE_NAME))"
-	@echo "  CONTAINER_REGISTRY       - Target registry for push (default: none)"
+	@echo "  CONTAINER_REPO           - Target repository for push (default: none)"
 	@echo
 	@echo "Version Detection:"
 	@echo "  The Makefile automatically detects the latest releases from GitHub."
@@ -123,23 +121,23 @@ help:
 	@echo "    kubectl-ssh-oidc: $(KUBECTL_SSH_OIDC_VERSION)"
 	@echo "  Override with: make DEX_VERSION=v2.40.0 KUBECTL_SSH_OIDC_VERSION=v0.2.0 build"
 	@echo
-	@echo "Registry Examples:"
+	@echo "Repository Examples:"
 	@echo "  Docker Hub:"
-	@echo "    make CONTAINER_REGISTRY=your-username build tag push"
+	@echo "    make CONTAINER_REPO=your-username/dex build tag push"
 	@echo
 	@echo "  GitHub Container Registry:"
-	@echo "    make CONTAINER_REGISTRY=ghcr.io/your-username build tag push"
+	@echo "    make CONTAINER_REPO=ghcr.io/your-username/dex build tag push"
 	@echo
 	@echo "  AWS ECR:"
-	@echo "    make CONTAINER_REGISTRY=123456789012.dkr.ecr.us-west-2.amazonaws.com build tag push"
+	@echo "    make CONTAINER_REPO=123456789012.dkr.ecr.us-west-2.amazonaws.com/dex build tag push"
 	@echo
 	@echo "  Azure Container Registry:"
-	@echo "    make CONTAINER_REGISTRY=yourregistry.azurecr.io build tag push"
+	@echo "    make CONTAINER_REPO=yourregistry.azurecr.io/dex build tag push"
 	@echo
 	@echo "  Google Container Registry:"
-	@echo "    make CONTAINER_REGISTRY=gcr.io/your-project-id build tag push"
+	@echo "    make CONTAINER_REPO=gcr.io/your-project-id/dex build tag push"
 	@echo
 	@echo "Example Usage:"
-	@echo "  make build                                    # Build locally"
-	@echo "  make CONTAINER_REGISTRY=my.registry.com push # Build and push to registry"
-	@echo "  make DEX_VERSION=v2.40.0 build               # Build with specific Dex version"
+	@echo "  make build                                        # Build locally (dex:v2.44.0-0.1.1)"
+	@echo "  make CONTAINER_REPO=my.registry.com/dex push      # Build and push to repository"
+	@echo "  make DEX_VERSION=v2.40.0 build                    # Build with specific Dex version"

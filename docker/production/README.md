@@ -10,16 +10,16 @@ cd docker
 make build
 ```
 
-### Build and Push to Registry
+### Build and Push to Repository
 ```bash
 # Docker Hub
-make CONTAINER_REGISTRY=your-username build push
+make CONTAINER_REPO=your-username/dex build push
 
 # GitHub Container Registry
-make CONTAINER_REGISTRY=ghcr.io/your-username build push
+make CONTAINER_REPO=ghcr.io/your-username/dex build push
 
 # AWS ECR
-make CONTAINER_REGISTRY=123456789012.dkr.ecr.us-west-2.amazonaws.com build push
+make CONTAINER_REPO=123456789012.dkr.ecr.us-west-2.amazonaws.com/dex build push
 ```
 
 ## 🏗️ What Gets Built
@@ -40,26 +40,28 @@ The Dockerfile creates a custom Dex image that:
 |----------|---------|-------------|
 | `DEX_VERSION` | **Auto-detected from GitHub** | Dex version to build against |
 | `KUBECTL_SSH_OIDC_VERSION` | **Auto-detected from GitHub** | kubectl-ssh-oidc version for SSH connector |
-| `IMAGE_NAME` | `dex-ssh-oidc` | Local image name |
-| `CONTAINER_REGISTRY` | (none) | Target registry for push operations |
+| `CONTAINER_REPO` | (none) | Target repository for push operations |
 
-### Registry Examples
+### Image Naming
+The image is tagged as `dex:<dex-version>-<kubectl-ssh-oidc-version>` (e.g., `dex:v2.44.0-0.1.2`).
+
+### Repository Examples
 
 ```bash
 # Docker Hub
-make CONTAINER_REGISTRY=your-dockerhub-username
+make CONTAINER_REPO=your-dockerhub-username/dex
 
 # GitHub Container Registry
-make CONTAINER_REGISTRY=ghcr.io/your-github-username
+make CONTAINER_REPO=ghcr.io/your-github-username/dex
 
 # AWS ECR (replace with your account ID and region)
-make CONTAINER_REGISTRY=123456789012.dkr.ecr.us-west-2.amazonaws.com
+make CONTAINER_REPO=123456789012.dkr.ecr.us-west-2.amazonaws.com/dex
 
 # Azure Container Registry
-make CONTAINER_REGISTRY=yourregistry.azurecr.io
+make CONTAINER_REPO=yourregistry.azurecr.io/dex
 
 # Google Container Registry
-make CONTAINER_REGISTRY=gcr.io/your-project-id
+make CONTAINER_REPO=gcr.io/your-project-id/dex
 ```
 
 ## 🔧 Advanced Usage
@@ -100,7 +102,7 @@ make help
 ```bash
 # Run with config file mounted
 docker run -v $(pwd)/config.yaml:/etc/dex/cfg/config.yaml \
-  dex-ssh-oidc:v2.39.1-kubectl-0.1.0 serve /etc/dex/cfg/config.yaml
+  dex:v2.44.0-0.1.2 serve /etc/dex/cfg/config.yaml
 ```
 
 ### Kubernetes Deployment
@@ -121,7 +123,7 @@ spec:
     spec:
       containers:
       - name: dex
-        image: your-registry/dex-ssh-oidc:v2.39.1-kubectl-0.1.0
+        image: your-registry/dex:v2.44.0-0.1.2
         ports:
         - containerPort: 5556
         volumeMounts:
@@ -220,11 +222,11 @@ make DEX_VERSION=v2.39.1 KUBECTL_SSH_OIDC_VERSION=0.1.0 build
 docker login your-registry.com
 
 # Check image tags
-docker images | grep dex-ssh-oidc
+docker images | grep dex
 
 # Manual tag and push
-docker tag dex-ssh-oidc:latest your-registry.com/dex-ssh-oidc:latest
-docker push your-registry.com/dex-ssh-oidc:latest
+docker tag dex:v2.44.0-0.1.2 your-registry.com/dex:v2.44.0-0.1.2
+docker push your-registry.com/dex:v2.44.0-0.1.2
 ```
 
 ## 📞 Support

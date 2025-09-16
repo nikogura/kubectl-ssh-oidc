@@ -31,7 +31,7 @@ docker/
 
 ```bash
 cd docker/production
-make CONTAINER_REGISTRY=your-registry.com build push
+make CONTAINER_REPO=your-registry.com/dex build push
 ```
 
 ### 🧪 **Integration Testing** (`integration-testing/`)
@@ -53,10 +53,10 @@ docker build -f docker/integration-testing/Dockerfile -t dex-test:latest .
 ```bash
 # Build and push to Docker Hub
 cd docker/production
-make CONTAINER_REGISTRY=myusername build push
+make CONTAINER_REPO=myusername/dex build push
 
 # Use in Kubernetes
-kubectl set image deployment/dex dex=myusername/dex-ssh-oidc:v2.39.1-kubectl-0.1.0
+kubectl set image deployment/dex dex=myusername/dex:v2.44.0-0.1.2
 ```
 
 ### Local Development
