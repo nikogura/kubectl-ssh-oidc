@@ -38,8 +38,8 @@ jobs:
       uses: paulhatch/semantic-version@v5.4.0
       with:
         bump_each_commit: true
-        tag_prefix: ""
-        format: "${major}.${minor}.${patch}"
+        tag_prefix: "v"
+        format: "v${major}.${minor}.${patch}"
       id: semver
 
     - name: Set up Go
@@ -153,7 +153,6 @@ jobs:
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         custom_tag: ${{ needs.test.outputs.version_tag }}
-        tag_prefix: ""
 
     - name: Publish Release
       uses: softprops/action-gh-release@v2
