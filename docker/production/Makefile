@@ -1,14 +1,22 @@
 # Build variables - defaults to latest versions from GitHub
 # Can be overridden via environment variables: make DEX_VERSION=v2.40.0 KUBECTL_SSH_OIDC_VERSION=v0.2.0 build
 
-# Function to get latest GitHub release tag
+# Function to get latest GitHub release tag with better error handling
 define get_latest_release
-$(shell curl -s https://api.github.com/repos/$(1)/releases/latest | jq -r '.tag_name // "$(2)"' 2>/dev/null || echo "$(2)")
+$(shell \
+  response=$$(curl -s https://api.github.com/repos/$(1)/releases/latest 2>/dev/null); \
+  if echo "$$response" | grep -q '"tag_name"'; then \
+    echo "$$response" | jq -r '.tag_name' 2>/dev/null || echo "$(2)"; \
+  else \
+    echo "$(2)"; \
+  fi \
+)
 endef
 
-# Default to latest releases from GitHub, with fallbacks
+# Check for rate limiting and provide informative fallbacks
+# Updated fallbacks to more recent versions
 DEX_VERSION ?= $(call get_latest_release,dexidp/dex,v2.39.1)
-KUBECTL_SSH_OIDC_VERSION ?= $(call get_latest_release,nikogura/kubectl-ssh-oidc,0.1.0)
+KUBECTL_SSH_OIDC_VERSION ?= $(call get_latest_release,nikogura/kubectl-ssh-oidc,v0.1.4)
 
 # Container repository settings - customize for your repository
 # Examples:
@@ -57,8 +65,8 @@ push: tag
 
 info:
 	@echo "=== Build Configuration ==="
-	@echo "Dex version: $(ACTUAL_DEX_VERSION) (auto-detected from GitHub)"
-	@echo "kubectl-ssh-oidc version: $(KUBECTL_SSH_OIDC_VERSION) (auto-detected from GitHub)"
+	@echo "Dex version: $(ACTUAL_DEX_VERSION)"
+	@echo "kubectl-ssh-oidc version: $(KUBECTL_SSH_OIDC_VERSION)"
 	@echo "Local image tag: $(LOCAL_IMAGE_TAG)"
 	@echo "Remote image tag: $(REMOTE_IMAGE_TAG)"
 ifdef CONTAINER_REPO
@@ -66,22 +74,40 @@ ifdef CONTAINER_REPO
 else
 	@echo "Container repository: <not set - local builds only>"
 endif
-	@echo "Note: Set DEX_VERSION and/or KUBECTL_SSH_OIDC_VERSION env vars to override auto-detection"
+	@echo
+	@echo "Note: Versions are auto-detected from GitHub or use fallbacks if rate limited."
+	@echo "      Use 'make versions' to check GitHub API status."
+	@echo "      Set DEX_VERSION and/or KUBECTL_SSH_OIDC_VERSION env vars to override."
 	@echo
 
 versions:
 	@echo "=== Version Detection ==="
-	@echo "Auto-detecting latest versions from GitHub..."
+	@echo "Checking GitHub API for latest releases..."
 	@echo
-	@echo "Dex latest release:"
-	@curl -s https://api.github.com/repos/dexidp/dex/releases/latest | jq -r '.tag_name // "Unable to detect"' 2>/dev/null || echo "Unable to detect (jq required)"
+	@dex_response=$$(curl -s https://api.github.com/repos/dexidp/dex/releases/latest 2>/dev/null); \
+	if echo "$$dex_response" | grep -q '"tag_name"'; then \
+		echo "Dex latest release: $$(echo "$$dex_response" | jq -r '.tag_name')"; \
+	elif echo "$$dex_response" | grep -q "rate limit"; then \
+		echo "Dex latest release: Rate limited (using fallback: v2.39.1)"; \
+	else \
+		echo "Dex latest release: API error (using fallback: v2.39.1)"; \
+	fi
 	@echo
-	@echo "kubectl-ssh-oidc latest release:"
-	@curl -s https://api.github.com/repos/nikogura/kubectl-ssh-oidc/releases/latest | jq -r '.tag_name // "Unable to detect"' 2>/dev/null || echo "Unable to detect (jq required)"
+	@kubectl_response=$$(curl -s https://api.github.com/repos/nikogura/kubectl-ssh-oidc/releases/latest 2>/dev/null); \
+	if echo "$$kubectl_response" | grep -q '"tag_name"'; then \
+		echo "kubectl-ssh-oidc latest release: $$(echo "$$kubectl_response" | jq -r '.tag_name')"; \
+	elif echo "$$kubectl_response" | grep -q "rate limit"; then \
+		echo "kubectl-ssh-oidc latest release: Rate limited (using fallback: v0.1.4)"; \
+	else \
+		echo "kubectl-ssh-oidc latest release: API error (using fallback: v0.1.4)"; \
+	fi
 	@echo
 	@echo "Currently configured versions:"
 	@echo "  DEX_VERSION=$(DEX_VERSION)"
 	@echo "  KUBECTL_SSH_OIDC_VERSION=$(KUBECTL_SSH_OIDC_VERSION)"
+	@echo
+	@echo "Note: GitHub API has a rate limit of 60 requests/hour for unauthenticated requests."
+	@echo "If rate limited, the build uses recent known-good fallback versions (Dex v2.39.1, kubectl-ssh-oidc v0.1.4)."
 
 check-repo:
 ifndef CONTAINER_REPO
@@ -115,11 +141,13 @@ help:
 	@echo "  CONTAINER_REPO           - Target repository for push (default: none)"
 	@echo
 	@echo "Version Detection:"
-	@echo "  The Makefile automatically detects the latest releases from GitHub."
-	@echo "  Current detected versions:"
+	@echo "  The Makefile attempts to auto-detect latest releases from GitHub."
+	@echo "  If GitHub API is rate limited, it uses recent fallback versions."
+	@echo "  Current configured versions:"
 	@echo "    Dex: $(DEX_VERSION)"
 	@echo "    kubectl-ssh-oidc: $(KUBECTL_SSH_OIDC_VERSION)"
 	@echo "  Override with: make DEX_VERSION=v2.40.0 KUBECTL_SSH_OIDC_VERSION=v0.2.0 build"
+	@echo "  Check API status: make versions"
 	@echo
 	@echo "Repository Examples:"
 	@echo "  Docker Hub:"
@@ -138,6 +166,6 @@ help:
 	@echo "    make CONTAINER_REPO=gcr.io/your-project-id/dex build tag push"
 	@echo
 	@echo "Example Usage:"
-	@echo "  make build                                        # Build locally (dex:v2.44.0-0.1.1)"
+	@echo "  make build                                        # Build locally (dex:v2.39.1-v0.1.4)"
 	@echo "  make CONTAINER_REPO=my.registry.com/dex push      # Build and push to repository"
 	@echo "  make DEX_VERSION=v2.40.0 build                    # Build with specific Dex version"

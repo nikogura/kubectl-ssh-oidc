@@ -24,7 +24,7 @@ docker/
 ✅ **Advantages:**
 - Fully self-contained (no local source needed)
 - Builds from stable GitHub releases
-- **Auto-detects latest versions** from GitHub API
+- **Auto-detects latest versions** from GitHub API (with fallbacks for rate limiting)
 - Multi-registry support (Docker Hub, ECR, GCR, etc.)
 - Automated build system with Makefile
 - Version-controlled and reproducible
@@ -56,7 +56,7 @@ cd docker/production
 make CONTAINER_REPO=myusername/dex build push
 
 # Use in Kubernetes
-kubectl set image deployment/dex dex=myusername/dex:v2.44.0-0.1.2
+kubectl set image deployment/dex dex=myusername/dex:v2.39.1-0.1.4
 ```
 
 ### Local Development

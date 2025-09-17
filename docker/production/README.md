@@ -68,10 +68,10 @@ make CONTAINER_REPO=gcr.io/your-project-id/dex
 
 ### Version Detection and Override
 ```bash
-# Check what versions will be used (auto-detected from GitHub)
+# Check what versions will be used and GitHub API status
 make versions
 
-# Get build information (shows detected versions)
+# Get build information (shows configured versions)
 make info
 
 # Override with specific versions
@@ -80,6 +80,9 @@ make DEX_VERSION=v2.40.0 KUBECTL_SSH_OIDC_VERSION=v0.2.0 build
 # Build from development branch
 make KUBECTL_SSH_OIDC_VERSION=main build
 ```
+
+**Note on Version Detection:**
+The Makefile attempts to auto-detect the latest releases from GitHub API. However, GitHub has a rate limit of 60 requests per hour for unauthenticated requests. When rate limited, the build automatically uses recent known-good fallback versions (currently Dex v2.39.1 and kubectl-ssh-oidc v0.1.4).
 
 ### Development Workflow
 ```bash
@@ -102,7 +105,7 @@ make help
 ```bash
 # Run with config file mounted
 docker run -v $(pwd)/config.yaml:/etc/dex/cfg/config.yaml \
-  dex:v2.44.0-0.1.2 serve /etc/dex/cfg/config.yaml
+  dex:v2.39.1-0.1.4 serve /etc/dex/cfg/config.yaml
 ```
 
 ### Kubernetes Deployment
@@ -123,7 +126,7 @@ spec:
     spec:
       containers:
       - name: dex
-        image: your-registry/dex:v2.44.0-0.1.2
+        image: your-registry/dex:v2.39.1-0.1.4
         ports:
         - containerPort: 5556
         volumeMounts:
@@ -206,14 +209,29 @@ connectors:
 
 ### Build Issues
 ```bash
-# Check build info
+# Check build info and current versions
 make info
+
+# Check GitHub API status and version detection
+make versions
 
 # Clean and rebuild
 make clean build
 
-# Build with specific versions
-make DEX_VERSION=v2.39.1 KUBECTL_SSH_OIDC_VERSION=0.1.0 build
+# Build with specific versions (bypass version detection)
+make DEX_VERSION=v2.39.1 KUBECTL_SSH_OIDC_VERSION=v0.1.4 build
+```
+
+### Version Detection Issues
+```bash
+# If you see older versions being used (e.g., 0.1.0 instead of 0.1.4):
+make versions  # Check if GitHub API is rate limited
+
+# Force specific versions to bypass auto-detection:
+make DEX_VERSION=v2.39.1 KUBECTL_SSH_OIDC_VERSION=v0.1.4 build
+
+# Check API rate limit status (resets hourly):
+curl -s https://api.github.com/rate_limit
 ```
 
 ### Registry Issues
@@ -225,8 +243,8 @@ docker login your-registry.com
 docker images | grep dex
 
 # Manual tag and push
-docker tag dex:v2.44.0-0.1.2 your-registry.com/dex:v2.44.0-0.1.2
-docker push your-registry.com/dex:v2.44.0-0.1.2
+docker tag dex:v2.39.1-0.1.4 your-registry.com/dex:v2.39.1-0.1.4
+docker push your-registry.com/dex:v2.39.1-0.1.4
 ```
 
 ## 📞 Support
