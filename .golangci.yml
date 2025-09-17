@@ -56,12 +56,6 @@ formatters:
       max-len: 200
 
 linters:
-  custom:
-    namedreturns:
-      path: github.com/nikogura/namedreturns
-      type: module
-      description: enforces the use of named returns in Go functions
-
   enable:
     - asasalint # checks for pass []any as any in variadic func(...any)
     - asciicheck # checks that your code does not contain non-ASCII identifiers
@@ -327,6 +321,7 @@ linters:
       # Default: []
       disable:
         - fieldalignment # too strict
+        - buildtag # false positives with copyright headers in files with build tags
       # Settings per analyzer.
       settings:
         shadow:
