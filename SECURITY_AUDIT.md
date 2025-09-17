@@ -56,6 +56,14 @@ The kubectl-ssh-oidc project demonstrates solid security practices with comprehe
 - **Timeout Controls**: Prevents resource exhaustion attacks
 - **Secure Headers**: Proper Content-Type and Accept headers
 
+#### 8. **Comprehensive Audit Logging** ✅ **NEW**
+- **Structured Logging**: All authentication events logged with structured format
+- **Success & Failure Tracking**: Logs both successful and failed authentication attempts
+- **Detailed Context**: Includes username, SSH key fingerprint, issuer, status, and error details
+- **Security Monitoring**: Format optimized for SIEM and log analysis tools
+- **Example**: `SSH_AUDIT: type=auth_success username=john.doe key=SHA256:abc123... issuer=kubectl-ssh-oidc status=success details="..."`
+- **Coverage**: Validates JWT parsing, expired tokens, invalid audience/issuer, unauthorized users/keys
+
 ---
 
 ### **🟢 SECURITY ASSESSMENT**
@@ -115,7 +123,7 @@ All dependencies appear to be current and free of known security vulnerabilities
 - Emphasizes strong key types (Ed25519, RSA 4096+)
 - Recommends hardware-backed keys
 - Includes network security guidance
-- Provides audit logging recommendations
+- Documents comprehensive built-in audit logging features
 - Documents principle of least privilege
 
 ---
@@ -129,7 +137,6 @@ All dependencies appear to be current and free of known security vulnerabilities
 
 ### **Low Priority** (Future Enhancements)
 1. **Rate Limiting**: Consider implementing client-side rate limiting for key attempts
-2. **Audit Logging**: Optional structured audit logging for compliance environments
 
 ---
 

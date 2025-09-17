@@ -120,6 +120,7 @@ func (c *SSHConnector) HandleCallback(scopes connector.Scopes, r *http.Request) 
 	}
 
 	if sshJWT == "" {
+		c.logAuditEvent("auth_attempt", "", "", "", "failed", "no SSH JWT or authorization code provided")
 		return identity, errors.New("no SSH JWT or authorization code provided")
 	}
 
@@ -129,8 +130,6 @@ func (c *SSHConnector) HandleCallback(scopes connector.Scopes, r *http.Request) 
 
 // validateSSHJWT validates an SSH-signed JWT and extracts user identity.
 // Updated for jwt-ssh-agent approach: direct JWT parsing with proper validation.
-//
-//nolint:gocognit // JWT validation requires comprehensive checks for security
 func (c *SSHConnector) validateSSHJWT(sshJWTString string) (connector.Identity, error) {
 	// Register our custom SSH signing method for JWT parsing
 	jwt.RegisterSigningMethod("SSH", func() jwt.SigningMethod {
@@ -170,6 +169,7 @@ func (c *SSHConnector) validateSSHJWT(sshJWTString string) (connector.Identity, 
 	})
 
 	if err != nil {
+		c.logAuditEvent("auth_attempt", "unknown", "unknown", "unknown", "failed", fmt.Sprintf("JWT parse error: %s", err.Error()))
 		return connector.Identity{}, fmt.Errorf("failed to parse JWT: %w", err)
 	}
 
@@ -179,47 +179,11 @@ func (c *SSHConnector) validateSSHJWT(sshJWTString string) (connector.Identity, 
 		return connector.Identity{}, errors.New("invalid JWT claims format")
 	}
 
-	// Validate required claims
-	sub, ok := claims["sub"].(string)
-	if !ok || sub == "" {
-		return connector.Identity{}, errors.New("missing or invalid sub claim")
-	}
-
-	aud, ok := claims["aud"].(string)
-	if !ok || aud == "" {
-		return connector.Identity{}, errors.New("missing or invalid aud claim")
-	}
-
-	// Validate audience - ensure this token is intended for our Dex instance
-	if aud != "kubernetes" {
-		return connector.Identity{}, fmt.Errorf("invalid audience: %s", aud)
-	}
-
-	iss, ok := claims["iss"].(string)
-	if !ok || iss == "" {
-		return connector.Identity{}, errors.New("missing or invalid iss claim")
-	}
-
-	// Validate issuer
-	if !c.isAllowedIssuer(iss) {
-		return connector.Identity{}, fmt.Errorf("invalid issuer: %s", iss)
-	}
-
-	// Validate expiration (critical security check)
-	exp, ok := claims["exp"].(float64)
-	if !ok {
-		return connector.Identity{}, errors.New("missing or invalid exp claim")
-	}
-
-	if time.Unix(int64(exp), 0).Before(time.Now()) {
-		return connector.Identity{}, errors.New("token has expired")
-	}
-
-	// Validate not before
-	if nbfClaim, nbfOk := claims["nbf"].(float64); nbfOk {
-		if time.Unix(int64(nbfClaim), 0).After(time.Now()) {
-			return connector.Identity{}, errors.New("token not yet valid")
-		}
+	// Validate JWT claims (extracted for readability)
+	sub, iss, err := c.validateJWTClaims(claims)
+	if err != nil {
+		c.logAuditEvent("auth_attempt", sub, "unknown", iss, "failed", err.Error())
+		return connector.Identity{}, err
 	}
 
 	// Extract key fingerprint for user lookup
@@ -231,6 +195,7 @@ func (c *SSHConnector) validateSSHJWT(sshJWTString string) (connector.Identity, 
 	// Look up user info by username (sub claim) and verify key is authorized
 	userInfo, err := c.findUserByUsernameAndKey(sub, keyFingerprint)
 	if err != nil {
+		c.logAuditEvent("auth_attempt", sub, keyFingerprint, iss, "failed", err.Error())
 		return connector.Identity{}, fmt.Errorf("SSH authentication failed for user %s with key %s: %w", sub, keyFingerprint, err)
 	}
 
@@ -242,6 +207,9 @@ func (c *SSHConnector) validateSSHJWT(sshJWTString string) (connector.Identity, 
 		EmailVerified: true,
 		Groups:        append(userInfo.Groups, c.config.DefaultGroups...),
 	}
+
+	// Log successful authentication
+	c.logAuditEvent("auth_success", sub, keyFingerprint, iss, "success", fmt.Sprintf("user %s authenticated with key %s", sub, keyFingerprint))
 
 	// Note: PreferredUsername field may not be available in all versions of dex connector
 	// Setting display name would go here if the field exists in the connector.Identity struct
@@ -282,6 +250,55 @@ func (c *SSHConnector) verifySSHSignature(token, signatureB64, format, publicKey
 	}
 
 	return nil
+}
+
+// validateJWTClaims validates the standard JWT claims (sub, aud, iss, exp, nbf).
+// Returns subject, issuer, and any validation error.
+func (c *SSHConnector) validateJWTClaims(claims jwt.MapClaims) (string, string, error) {
+	// Validate required claims
+	sub, ok := claims["sub"].(string)
+	if !ok || sub == "" {
+		return "", "", errors.New("missing or invalid sub claim")
+	}
+
+	aud, ok := claims["aud"].(string)
+	if !ok || aud == "" {
+		return sub, "", errors.New("missing or invalid aud claim")
+	}
+
+	iss, ok := claims["iss"].(string)
+	if !ok || iss == "" {
+		return sub, "", errors.New("missing or invalid iss claim")
+	}
+
+	// Validate audience - ensure this token is intended for our Dex instance
+	if aud != "kubernetes" {
+		return sub, iss, fmt.Errorf("invalid audience: %s", aud)
+	}
+
+	// Validate issuer
+	if !c.isAllowedIssuer(iss) {
+		return sub, iss, fmt.Errorf("invalid issuer: %s", iss)
+	}
+
+	// Validate expiration (critical security check)
+	exp, ok := claims["exp"].(float64)
+	if !ok {
+		return sub, iss, errors.New("missing or invalid exp claim")
+	}
+
+	if time.Unix(int64(exp), 0).Before(time.Now()) {
+		return sub, iss, errors.New("token has expired")
+	}
+
+	// Validate not before if present
+	if nbfClaim, nbfOk := claims["nbf"].(float64); nbfOk {
+		if time.Unix(int64(nbfClaim), 0).After(time.Now()) {
+			return sub, iss, errors.New("token not yet valid")
+		}
+	}
+
+	return sub, iss, nil
 }
 
 // findUserByUsernameAndKey finds a user by username and verifies the key is authorized.
@@ -858,5 +875,29 @@ func (c *SSHConnector) HandleDirectTokenRequest(w http.ResponseWriter, r *http.R
 	if encodeErr != nil {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 		return
+	}
+}
+
+// logAuditEvent logs SSH authentication events for security auditing.
+// This provides comprehensive audit trails for SSH-based authentication attempts.
+func (c *SSHConnector) logAuditEvent(eventType, username, keyFingerprint, issuer, status, details string) {
+	// Build structured log message
+	logMsg := fmt.Sprintf("SSH_AUDIT: type=%s username=%s key=%s issuer=%s status=%s details=%q",
+		eventType, username, keyFingerprint, issuer, status, details)
+
+	// Try to use the Dex logger if available (different versions have different interfaces)
+	if infofLogger, ok := c.logger.(interface{ Infof(string, ...interface{}) }); ok {
+		// Dex v2.39.1+ style logger
+		infofLogger.Infof(logMsg)
+	} else if infoLogger, ok2 := c.logger.(interface{ Info(string, ...interface{}) }); ok2 {
+		// Alternative logger interface
+		infoLogger.Info(logMsg)
+	} else if printfLogger, ok3 := c.logger.(interface{ Printf(string, ...interface{}) }); ok3 {
+		// Printf-style logger
+		printfLogger.Printf(logMsg)
+	} else {
+		// Fallback: use standard output for audit logging
+		// This ensures audit events are always logged even if logger interface is unavailable
+		fmt.Printf("%s\n", logMsg)
 	}
 }

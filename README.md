@@ -537,7 +537,14 @@ echo "Username: ${KUBECTL_SSH_USER:-$(whoami)}"
 - **Key Rotation**: Regularly rotate SSH keys and update Dex configuration
 - **Hardware Keys**: Consider using hardware-backed SSH keys (YubiKey, etc.)
 - **Network Security**: Always use TLS for Dex and Kubernetes API communications
-- **Audit Logging**: Enable audit logging in Kubernetes for authentication events
+- **Audit Logging**:
+  - Enable audit logging in Kubernetes for authentication events
+  - SSH connector provides comprehensive audit logs with structured format:
+    ```
+    SSH_AUDIT: type=auth_success username=john.doe key=SHA256:L3O7OK+AeW8FbsNuK+YzFbN7TKbGbqaGM6nOtmKrK24 issuer=kubectl-ssh-oidc status=success details="user john.doe authenticated with key SHA256:L3O7OK+AeW8FbsNuK+YzFbN7TKbGbqaGM6nOtmKrK24"
+    ```
+  - Logs both successful authentications and failed attempts with detailed reasons
+  - Includes username, SSH key fingerprint, issuer, and status for security monitoring
 - **Principle of Least Privilege**: Use RBAC to limit user permissions
 
 ## 🚦 Supported Platforms

@@ -80,6 +80,10 @@ func TestIntegrationSetup(t *testing.T) {
 		testSuccessfulAuthWithGoodUserMultipleKeys(t, testDir, key1Path, key2Path, "test-user")
 	})
 
+	t.Run("TestAuditLoggingWorking", func(t *testing.T) {
+		testAuditLoggingWorking(t, testDir, key1Path, key3Path, "test-user")
+	})
+
 	// Cleanup
 	t.Cleanup(func() {
 		stopServices(t)
@@ -141,8 +145,24 @@ func setDexEnvironment(fingerprint1, fingerprint2, fingerprint3 string) {
 func startServices(t *testing.T) {
 	t.Log("Starting Docker Compose services...")
 
+	// Find the correct directory - either we're in project root or in test/integration
+	var composeDir string
+	_, err1 := os.Stat("docker-compose.yml")
+	if err1 == nil {
+		// We're in test/integration directory
+		composeDir = "."
+	} else {
+		_, err2 := os.Stat("test/integration/docker-compose.yml")
+		if err2 == nil {
+			// We're in project root
+			composeDir = "test/integration"
+		} else {
+			t.Fatal("Cannot find docker-compose.yml file")
+		}
+	}
+
 	cmd := exec.Command("docker-compose", "up", "-d", "--build")
-	cmd.Dir = "."
+	cmd.Dir = composeDir
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("TEST_KEY_FINGERPRINT_1=%s", os.Getenv("TEST_KEY_FINGERPRINT_1")),
 		fmt.Sprintf("TEST_KEY_FINGERPRINT_2=%s", os.Getenv("TEST_KEY_FINGERPRINT_2")),
@@ -160,8 +180,25 @@ func startServices(t *testing.T) {
 func stopServices(t *testing.T) {
 	t.Log("Stopping Docker Compose services...")
 
+	// Find the correct directory - either we're in project root or in test/integration
+	var composeDir string
+	_, err1 := os.Stat("docker-compose.yml")
+	if err1 == nil {
+		// We're in test/integration directory
+		composeDir = "."
+	} else {
+		_, err2 := os.Stat("test/integration/docker-compose.yml")
+		if err2 == nil {
+			// We're in project root
+			composeDir = "test/integration"
+		} else {
+			t.Logf("Warning: Cannot find docker-compose.yml file for cleanup")
+			return
+		}
+	}
+
 	cmd := exec.Command("docker-compose", "down", "-v")
-	cmd.Dir = "."
+	cmd.Dir = composeDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Logf("Warning: Failed to stop services: %v\nOutput: %s", err, output)
@@ -345,6 +382,105 @@ func testSuccessfulAuthWithGoodUserMultipleKeys(t *testing.T, _ string, key1Path
 	assert.Contains(t, string(output2), "token", "Second key should receive token")
 
 	t.Log("✅ Successful authentication with good user and multiple keys verified!")
+}
+
+// testAuditLoggingWorking tests that audit logs are generated for both successful and failed authentication attempts.
+func testAuditLoggingWorking(t *testing.T, testDir, goodKeyPath, _ string, username string) {
+	t.Log("Testing that audit logging is working...")
+
+	binaryPath := buildKubectlSSHOIDC(t)
+
+	// Clear any existing logs by getting a baseline
+	getDexLogs(t)
+	time.Sleep(1 * time.Second) // Brief pause to ensure log separation
+
+	// Test 1: Successful authentication should generate success audit log
+	t.Log("Testing successful authentication audit log...")
+	env := []string{
+		"SSH_USE_AGENT=false",
+		fmt.Sprintf("SSH_KEY_PATHS=%s", goodKeyPath),
+		"SSH_IDENTITIES_ONLY=true",
+		fmt.Sprintf("KUBECTL_SSH_USER=%s", username),
+	}
+
+	cmd := exec.Command(binaryPath, dexURL, "kubectl-ssh-oidc")
+	cmd.Env = append(os.Environ(), env...)
+	output, err := cmd.CombinedOutput()
+
+	require.NoError(t, err, "Authentication should succeed")
+	assert.Contains(t, string(output), "token", "Should receive token")
+
+	// Check for success audit log in Dex container logs
+	logs := getDexLogs(t)
+	assert.Contains(t, logs, "SSH_AUDIT:", "Should contain SSH audit log entry")
+	assert.Contains(t, logs, "type=auth_success", "Should contain successful auth type")
+	assert.Contains(t, logs, fmt.Sprintf("username=%s", username), "Should contain correct username")
+	assert.Contains(t, logs, "status=success", "Should contain success status")
+
+	t.Log("✅ Successful authentication audit log verified!")
+
+	// Test 2: Failed authentication should generate failure audit log
+	t.Log("Testing failed authentication audit log...")
+
+	// Generate unauthorized key
+	unauthorizedKeyPath, _ := generateSSHKey(t, testDir, "audit_test_unauthorized")
+
+	// Clear logs again for the failure test
+	getDexLogs(t)
+	time.Sleep(1 * time.Second)
+
+	failEnv := []string{
+		"SSH_USE_AGENT=false",
+		fmt.Sprintf("SSH_KEY_PATHS=%s", unauthorizedKeyPath),
+		"SSH_IDENTITIES_ONLY=true",
+		fmt.Sprintf("KUBECTL_SSH_USER=%s", username),
+	}
+
+	failCmd := exec.Command(binaryPath, dexURL, "kubectl-ssh-oidc")
+	failCmd.Env = append(os.Environ(), failEnv...)
+	_, failErr := failCmd.CombinedOutput()
+
+	require.Error(t, failErr, "Authentication should fail with unauthorized key")
+
+	// Check for failure audit log in Dex container logs
+	failLogs := getDexLogs(t)
+	assert.Contains(t, failLogs, "SSH_AUDIT:", "Should contain SSH audit log entry for failure")
+	assert.Contains(t, failLogs, "type=auth_attempt", "Should contain failed auth attempt type")
+	assert.Contains(t, failLogs, fmt.Sprintf("username=%s", username), "Should contain correct username in failure log")
+	assert.Contains(t, failLogs, "status=failed", "Should contain failed status")
+
+	t.Log("✅ Failed authentication audit log verified!")
+	t.Log("✅ Audit logging is working correctly for both success and failure cases!")
+}
+
+// getDexLogs retrieves recent logs from the Dex service.
+func getDexLogs(t *testing.T) string {
+	// Find the correct directory - either we're in project root or in test/integration
+	var composeDir string
+	_, err1 := os.Stat("docker-compose.yml")
+	if err1 == nil {
+		// We're in test/integration directory
+		composeDir = "."
+	} else {
+		_, err2 := os.Stat("test/integration/docker-compose.yml")
+		if err2 == nil {
+			// We're in project root
+			composeDir = "test/integration"
+		} else {
+			t.Logf("Warning: Cannot find docker-compose.yml file for logs")
+			return ""
+		}
+	}
+
+	// Use docker-compose logs to get Dex service logs
+	cmd := exec.Command("docker-compose", "logs", "--since=10s", "dex")
+	cmd.Dir = composeDir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Logf("Warning: Failed to get Dex container logs: %v", err)
+		return ""
+	}
+	return string(output)
 }
 
 // buildKubectlSSHOIDC builds the kubectl-ssh-oidc binary for testing.

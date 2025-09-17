@@ -432,6 +432,23 @@ kubectl-ssh_oidc https://dex.example.com
 | OIDC not configured | kubectl auth fails | Verify kube-apiserver OIDC settings |
 | Permission denied | kubectl commands fail | Check RBAC configuration |
 
+### Viewing SSH Audit Logs
+
+The SSH connector logs all authentication attempts with structured audit entries. Check Dex logs for:
+
+```
+SSH_AUDIT: type=auth_success username=john.doe key=SHA256:L3O7OK+... issuer=kubectl-ssh-oidc status=success details="user authenticated"
+SSH_AUDIT: type=auth_attempt username=jane.doe key=SHA256:abc123... issuer=kubectl-ssh-oidc status=failed details="token has expired"
+```
+
+These logs include:
+- **type**: Event type (auth_success, auth_attempt)
+- **username**: User attempting authentication
+- **key**: SSH key fingerprint used
+- **issuer**: JWT issuer identifier
+- **status**: success or failed
+- **details**: Additional context or error message
+
 ### Debug Commands
 
 ```bash
@@ -451,7 +468,7 @@ kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc your-username
 - Use strong SSH key types (RSA 4096, Ed25519, ECDSA P-384)
 - Limit SSH key access through authorized_keys configuration
 - Implement proper RBAC policies
-- Monitor authentication logs
+- Monitor authentication logs (SSH connector provides structured audit logs)
 - Use TLS for all communications
 
 ## Development
