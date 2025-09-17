@@ -1,6 +1,6 @@
 FROM golang:1.25-alpine AS builder
 
-ARG DEX_VERSION=v2.43.1
+ARG DEX_VERSION=v2.44.0
 
 # Install build dependencies
 RUN apk --no-cache add git curl make gcc musl-dev
@@ -14,11 +14,11 @@ RUN git clone --depth=1 --branch=${DEX_VERSION} https://github.com/dexidp/dex.gi
 # Create SSH connector directory
 RUN mkdir -p dex/connector/ssh
 
-# Copy SSH connector with Dex-compatible interface and version info
+# Copy SSH connector from project source
 COPY pkg/ssh/ssh.go dex/connector/ssh/ssh.go
 COPY pkg/ssh/version.go dex/connector/ssh/version.go
 
-# SSH connector already uses slog.Logger in source code - no patches needed
+# SSH connector uses slog.Logger compatible with latest Dex
 
 # Add SSH connector import to Dex and custom endpoint routing
 RUN cd dex && \
@@ -29,7 +29,7 @@ RUN cd dex && \
 RUN cd dex && \
     sed -i '/handleFunc.*\/callback.*handleConnectorCallback/a\\thandleFunc("/auth/ssh/token", s.handleSSHDirectToken)' server/server.go
 
-# Add SSH direct token handler method
+# Add SSH direct token handler method with slog.Logger compatibility
 RUN cd dex && \
     cat >> server/server.go << 'EOF'
 
@@ -39,61 +39,61 @@ func (s *Server) handleSSHDirectToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := s.getConnector("ssh")
+	conn, err := s.getConnector(r.Context(), "ssh")
 	if err != nil {
-		s.logger.Errorf("Failed to get SSH connector: %v", err)
+		s.logger.Error("Failed to get SSH connector", "error", err)
 		http.Error(w, "SSH connector not available", http.StatusServiceUnavailable)
 		return
 	}
 
 	// Provide Dex's signing key to the SSH connector
-	if sshConn, ok := conn.Connector.(interface{ 
+	if sshConn, ok := conn.Connector.(interface{
 		HandleDirectTokenRequest(http.ResponseWriter, *http.Request)
 		SetSigningKeyFromInterface(interface{}) error
 	}); ok {
 		// Get Dex's current signing key
-		keySet, keySetErr := s.storage.GetKeys()
+		keySet, keySetErr := s.storage.GetKeys(r.Context())
 		if keySetErr != nil {
-			s.logger.Errorf("Failed to get signing keys: %v", keySetErr)
+			s.logger.Error("Failed to get signing keys", "error", keySetErr)
 			http.Error(w, "Failed to get signing keys", http.StatusInternalServerError)
 			return
 		}
 
 		// DEBUG: Log all available keys to understand Dex's key structure
-		s.logger.Infof("DEBUG: Dex keySet.SigningKey type: %T", keySet.SigningKey)
-		s.logger.Infof("DEBUG: Dex SigningKey ID: %s", keySet.SigningKey.KeyID)
-		s.logger.Infof("DEBUG: Dex has %d verification keys", len(keySet.VerificationKeys))
+		s.logger.Info("DEBUG: Dex keySet.SigningKey type", "type", fmt.Sprintf("%T", keySet.SigningKey))
+		s.logger.Info("DEBUG: Dex SigningKey ID", "keyID", keySet.SigningKey.KeyID)
+		s.logger.Info("DEBUG: Dex has verification keys", "count", len(keySet.VerificationKeys))
 		for i, vk := range keySet.VerificationKeys {
-			s.logger.Infof("DEBUG: VerificationKey[%d] KeyID: %s, type: %T", i, vk.PublicKey.KeyID, vk.PublicKey)
+			s.logger.Info("DEBUG: VerificationKey", "index", i, "keyID", vk.PublicKey.KeyID, "type", fmt.Sprintf("%T", vk.PublicKey))
 		}
 
 		// Provide ALL available keys to the SSH connector so it can try each one
 		// First add the current signing key
 		signingKey := keySet.SigningKey
-		s.logger.Infof("DEBUG: Adding Dex SigningKey with KeyID: %s", signingKey.KeyID)
+		s.logger.Info("DEBUG: Adding Dex SigningKey", "keyID", signingKey.KeyID)
 
 		if keyErr := sshConn.SetSigningKeyFromInterface(signingKey); keyErr != nil {
-			s.logger.Errorf("Failed to set signing key: %v", keyErr)
+			s.logger.Error("Failed to set signing key", "error", keyErr)
 			http.Error(w, "Failed to configure signing key", http.StatusInternalServerError)
 			return
 		}
 
 		// Try to add verification keys if they contain private key material
 		for i, vk := range keySet.VerificationKeys {
-			s.logger.Infof("DEBUG: Attempting to add VerificationKey[%d] with KeyID: %s", i, vk.PublicKey.KeyID)
-			
+			s.logger.Info("DEBUG: Attempting to add VerificationKey", "index", i, "keyID", vk.PublicKey.KeyID)
+
 			if addErr := sshConn.SetSigningKeyFromInterface(vk.PublicKey); addErr != nil {
-				s.logger.Infof("DEBUG: VerificationKey[%d] cannot be used for signing: %v", i, addErr)
+				s.logger.Info("DEBUG: VerificationKey cannot be used for signing", "index", i, "error", addErr)
 			} else {
-				s.logger.Infof("DEBUG: Successfully added VerificationKey[%d] with KeyID: %s", i, vk.PublicKey.KeyID)
+				s.logger.Info("DEBUG: Successfully added VerificationKey", "index", i, "keyID", vk.PublicKey.KeyID)
 			}
 		}
 
-		s.logger.Infof("DEBUG: SSH connector initialized with signing key options")
+		s.logger.Info("DEBUG: SSH connector initialized with signing key options")
 
 		sshConn.HandleDirectTokenRequest(w, r)
 	} else {
-		s.logger.Errorf("SSH connector doesn't implement HandleDirectTokenRequest")
+		s.logger.Error("SSH connector doesn't implement HandleDirectTokenRequest")
 		http.Error(w, "SSH direct token not supported", http.StatusNotImplemented)
 	}
 }
