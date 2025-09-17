@@ -39,7 +39,7 @@ jobs:
       with:
         bump_each_commit: true
         tag_prefix: "v"
-        format: "v${major}.${minor}.${patch}"
+        format: "${major}.${minor}.${patch}"
       id: semver
 
     - name: Set up Go
