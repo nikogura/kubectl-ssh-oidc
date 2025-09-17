@@ -75,8 +75,11 @@ jobs:
         version: latest
         verify: false
 
-    - name: Run linting
+    - name: Lint Checks
       run: make lint
+
+    - name: Unit tests
+      run: make test
 
     # - name: Run integration tests
     #   run: make test-integration
