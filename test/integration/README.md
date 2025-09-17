@@ -2,6 +2,39 @@
 
 This directory contains end-to-end integration tests that validate the complete authentication flow between kubectl-ssh-oidc and a custom Dex instance with SSH connector.
 
+## 🚀 Running Integration Tests
+
+### GitHub Actions (CI)
+Integration tests run automatically in GitHub Actions using `hoverkraft-tech/compose-action`:
+
+```yaml
+# .github/workflows/ci.yml
+- name: Run integration tests
+  uses: hoverkraft-tech/compose-action@v2.0.1
+  with:
+    compose-file: "./test/integration/docker-compose.yml"
+```
+
+### Local Development
+
+**Option 1: Full Shell Script (Recommended)**
+```bash
+make test-integration
+```
+
+**Option 2: Quick Go Tests (requires services running)**
+```bash
+make test-integration-local  # Fast, but requires Docker Compose services to be running
+```
+
+**Option 3: Manual Docker Compose**
+```bash
+cd test/integration
+docker-compose up --build -d
+INTEGRATION_TEST=true go test -v -timeout 120s ./...
+docker-compose down -v
+```
+
 ## 🏗️ Test Architecture
 
 ```mermaid

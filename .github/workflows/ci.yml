@@ -81,9 +81,34 @@ jobs:
     - name: Unit tests
       run: make test
 
-    # - name: Run integration tests
-    #   run: make test-integration
-    #   timeout-minutes: 10
+    # Integration tests using Docker Compose with hoverkraft-tech/compose-action
+    # This approach works better in GitHub Actions than the Makefile approach
+    # For local development, you can still use: make test-integration-local
+    - name: Generate SSH test keys
+      run: |
+        # Generate test SSH keys for integration tests
+        mkdir -p /tmp/integration-test-keys
+
+        # Generate 3 test keys and capture their fingerprints
+        for i in 1 2 3; do
+          ssh-keygen -t ed25519 -f "/tmp/integration-test-keys/test_key_${i}" -N "" -C "integration-test-${i}"
+          fingerprint=$(ssh-keygen -lf "/tmp/integration-test-keys/test_key_${i}.pub" | awk '{print $2}')
+          echo "TEST_KEY_FINGERPRINT_${i}=$fingerprint" >> $GITHUB_ENV
+          echo "Generated key ${i}: $fingerprint"
+        done
+
+    - name: Run integration tests
+      uses: hoverkraft-tech/compose-action@v2.0.1
+      with:
+        compose-file: "./test/integration/docker-compose.yml"
+        up-flags: "--build"
+        down-flags: "--volumes --remove-orphans"
+
+    - name: Execute integration tests
+      run: |
+        # Use the optimized local Go test approach since services are already running
+        INTEGRATION_TEST=true go test -v -timeout 120s ./test/integration
+      timeout-minutes: 10
 
     - name: Upload test logs on failure
       if: failure()

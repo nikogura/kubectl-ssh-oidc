@@ -16,7 +16,7 @@ endef
 # Check for rate limiting and provide informative fallbacks
 # Updated fallbacks to more recent versions
 DEX_VERSION ?= $(call get_latest_release,dexidp/dex,v2.39.1)
-KUBECTL_SSH_OIDC_VERSION ?= $(call get_latest_release,nikogura/kubectl-ssh-oidc,v0.1.7)
+KUBECTL_SSH_OIDC_VERSION ?= $(call get_latest_release,nikogura/kubectl-ssh-oidc,v0.1.8)
 
 # Container repository settings - customize for your repository
 # Examples:
@@ -27,8 +27,8 @@ KUBECTL_SSH_OIDC_VERSION ?= $(call get_latest_release,nikogura/kubectl-ssh-oidc,
 #   Google GCR: CONTAINER_REPO = gcr.io/your-project-id/your-dex-repo
 CONTAINER_REPO ?=
 
-# Image naming - tag format: <dex-version>-<kubectl-ssh-oidc-version>
-IMAGE_TAG ?= $(DEX_VERSION)-$(KUBECTL_SSH_OIDC_VERSION)
+# Image naming - tag format: dex-<dex-version>-kubectl-ssh-oidc-<kubectl-ssh-oidc-version>
+IMAGE_TAG ?= dex-$(DEX_VERSION)-kubectl-ssh-oidc-$(KUBECTL_SSH_OIDC_VERSION)
 LOCAL_IMAGE_TAG = dex:$(IMAGE_TAG)
 
 # Full container tag (only set if repository is specified)
@@ -97,9 +97,9 @@ versions:
 	if echo "$$kubectl_response" | grep -q '"tag_name"'; then \
 		echo "kubectl-ssh-oidc latest release: $$(echo "$$kubectl_response" | jq -r '.tag_name')"; \
 	elif echo "$$kubectl_response" | grep -q "rate limit"; then \
-		echo "kubectl-ssh-oidc latest release: Rate limited (using fallback: v0.1.7)"; \
+		echo "kubectl-ssh-oidc latest release: Rate limited (using fallback: v0.1.8)"; \
 	else \
-		echo "kubectl-ssh-oidc latest release: API error (using fallback: v0.1.7)"; \
+		echo "kubectl-ssh-oidc latest release: API error (using fallback: v0.1.8)"; \
 	fi
 	@echo
 	@echo "Currently configured versions:"
@@ -107,7 +107,7 @@ versions:
 	@echo "  KUBECTL_SSH_OIDC_VERSION=$(KUBECTL_SSH_OIDC_VERSION)"
 	@echo
 	@echo "Note: GitHub API has a rate limit of 60 requests/hour for unauthenticated requests."
-	@echo "If rate limited, the build uses recent known-good fallback versions (Dex v2.39.1, kubectl-ssh-oidc v0.1.7)."
+	@echo "If rate limited, the build uses recent known-good fallback versions (Dex v2.39.1, kubectl-ssh-oidc v0.1.8)."
 
 check-repo:
 ifndef CONTAINER_REPO
@@ -166,6 +166,6 @@ help:
 	@echo "    make CONTAINER_REPO=gcr.io/your-project-id/dex build tag push"
 	@echo
 	@echo "Example Usage:"
-	@echo "  make build                                        # Build locally (dex:v2.39.1-v0.1.7)"
+	@echo "  make build                                        # Build locally (dex:dex-v2.39.1-kubectl-ssh-oidc-v0.1.8)"
 	@echo "  make CONTAINER_REPO=my.registry.com/dex push      # Build and push to repository"
 	@echo "  make DEX_VERSION=v2.40.0 build                    # Build with specific Dex version"
