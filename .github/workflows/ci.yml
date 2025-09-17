@@ -91,6 +91,7 @@ jobs:
           ssh-keygen -t ed25519 -f "/tmp/integration-test-keys/test_key_${i}" -N "" -C "integration-test-${i}"
           fingerprint=$(ssh-keygen -lf "/tmp/integration-test-keys/test_key_${i}.pub" | awk '{print $2}')
           echo "TEST_KEY_FINGERPRINT_${i}=$fingerprint" >> $GITHUB_ENV
+          echo "TEST_KEY_PATH_${i}=/tmp/integration-test-keys/test_key_${i}" >> $GITHUB_ENV
           echo "Generated key ${i}: $fingerprint"
         done
 
@@ -100,12 +101,23 @@ jobs:
         compose-file: "./test/integration/docker-compose.yml"
         up-flags: "--build"
         down-flags: "--volumes --remove-orphans"
+      env:
+        TEST_KEY_FINGERPRINT_1: ${{ env.TEST_KEY_FINGERPRINT_1 }}
+        TEST_KEY_FINGERPRINT_2: ${{ env.TEST_KEY_FINGERPRINT_2 }}
+        TEST_KEY_FINGERPRINT_3: ${{ env.TEST_KEY_FINGERPRINT_3 }}
 
     - name: Execute integration tests
       run: |
         # Use the optimized local Go test approach since services are already running
         INTEGRATION_TEST=true go test -v -timeout 120s ./test/integration
       timeout-minutes: 10
+      env:
+        TEST_KEY_FINGERPRINT_1: ${{ env.TEST_KEY_FINGERPRINT_1 }}
+        TEST_KEY_FINGERPRINT_2: ${{ env.TEST_KEY_FINGERPRINT_2 }}
+        TEST_KEY_FINGERPRINT_3: ${{ env.TEST_KEY_FINGERPRINT_3 }}
+        TEST_KEY_PATH_1: ${{ env.TEST_KEY_PATH_1 }}
+        TEST_KEY_PATH_2: ${{ env.TEST_KEY_PATH_2 }}
+        TEST_KEY_PATH_3: ${{ env.TEST_KEY_PATH_3 }}
 
     - name: Upload test logs on failure
       if: failure()
