@@ -506,6 +506,49 @@ func testAuditLoggingWorking(t *testing.T, testDir, goodKeyPath, _ string, usern
 
 // getDexLogs retrieves recent logs from the Dex service.
 func getDexLogs(t *testing.T) string {
+	if os.Getenv("GITHUB_ACTIONS") != "" {
+		// In GitHub Actions, use direct Docker commands to get logs from the running container
+		return getDexLogsDocker(t)
+	}
+
+	// Local environment - use docker-compose
+	return getDexLogsCompose(t)
+}
+
+// getDexLogsDocker gets Dex logs using direct Docker commands (for GitHub Actions).
+func getDexLogsDocker(t *testing.T) string {
+	// Find the Dex container by looking for containers with the dex service name
+	// The compose-action names containers like: {directory}_dex_1 or similar
+	findCmd := exec.Command("docker", "ps", "--format", "{{.Names}}", "--filter", "name=dex")
+	findOutput, err := findCmd.CombinedOutput()
+	if err != nil {
+		t.Logf("Warning: Failed to find Dex container: %v", err)
+		return ""
+	}
+
+	containerNames := strings.Split(strings.TrimSpace(string(findOutput)), "\n")
+	if len(containerNames) == 0 || containerNames[0] == "" {
+		t.Logf("Warning: No Dex container found")
+		return ""
+	}
+
+	// Use the first matching container
+	containerName := containerNames[0]
+	t.Logf("Found Dex container: %s", containerName)
+
+	// Get logs from the past 30 seconds
+	cmd := exec.Command("docker", "logs", "--since=30s", containerName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Logf("Warning: Failed to get logs from container %s: %v", containerName, err)
+		return ""
+	}
+
+	return string(output)
+}
+
+// getDexLogsCompose gets Dex logs using docker-compose (for local development).
+func getDexLogsCompose(t *testing.T) string {
 	// Find the correct directory - either we're in project root or in test/integration
 	var composeDir string
 	_, err1 := os.Stat("docker-compose.yml")
