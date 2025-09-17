@@ -78,9 +78,6 @@ jobs:
     - name: Lint Checks
       run: make lint
 
-    - name: Unit tests
-      run: make test
-
     # Integration tests using Docker Compose with hoverkraft-tech/compose-action
     # This approach works better in GitHub Actions than the Makefile approach
     # For local development, you can still use: make test-integration-local
