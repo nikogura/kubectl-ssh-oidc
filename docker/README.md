@@ -56,7 +56,7 @@ cd docker/production
 make CONTAINER_REPO=myusername/dex build push
 
 # Use in Kubernetes
-kubectl set image deployment/dex dex=myusername/dex:v2.39.1-0.1.4
+kubectl set image deployment/dex dex=myusername/dex:v2.39.1-0.1.7
 ```
 
 ### Local Development

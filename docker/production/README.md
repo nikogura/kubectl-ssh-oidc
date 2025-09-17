@@ -82,7 +82,7 @@ make KUBECTL_SSH_OIDC_VERSION=main build
 ```
 
 **Note on Version Detection:**
-The Makefile attempts to auto-detect the latest releases from GitHub API. However, GitHub has a rate limit of 60 requests per hour for unauthenticated requests. When rate limited, the build automatically uses recent known-good fallback versions (currently Dex v2.39.1 and kubectl-ssh-oidc v0.1.4).
+The Makefile attempts to auto-detect the latest releases from GitHub API. However, GitHub has a rate limit of 60 requests per hour for unauthenticated requests. When rate limited, the build automatically uses recent known-good fallback versions (currently Dex v2.39.1 and kubectl-ssh-oidc v0.1.7).
 
 ### Development Workflow
 ```bash
@@ -105,7 +105,7 @@ make help
 ```bash
 # Run with config file mounted
 docker run -v $(pwd)/config.yaml:/etc/dex/cfg/config.yaml \
-  dex:v2.39.1-0.1.4 serve /etc/dex/cfg/config.yaml
+  dex:v2.39.1-0.1.7 serve /etc/dex/cfg/config.yaml
 ```
 
 ### Kubernetes Deployment
@@ -126,7 +126,7 @@ spec:
     spec:
       containers:
       - name: dex
-        image: your-registry/dex:v2.39.1-0.1.4
+        image: your-registry/dex:v2.39.1-0.1.7
         ports:
         - containerPort: 5556
         volumeMounts:
@@ -219,16 +219,16 @@ make versions
 make clean build
 
 # Build with specific versions (bypass version detection)
-make DEX_VERSION=v2.39.1 KUBECTL_SSH_OIDC_VERSION=v0.1.4 build
+make DEX_VERSION=v2.39.1 KUBECTL_SSH_OIDC_VERSION=v0.1.7 build
 ```
 
 ### Version Detection Issues
 ```bash
-# If you see older versions being used (e.g., 0.1.0 instead of 0.1.4):
+# If you see older versions being used (e.g., 0.1.0 instead of 0.1.7):
 make versions  # Check if GitHub API is rate limited
 
 # Force specific versions to bypass auto-detection:
-make DEX_VERSION=v2.39.1 KUBECTL_SSH_OIDC_VERSION=v0.1.4 build
+make DEX_VERSION=v2.39.1 KUBECTL_SSH_OIDC_VERSION=v0.1.7 build
 
 # Check API rate limit status (resets hourly):
 curl -s https://api.github.com/rate_limit
@@ -243,8 +243,8 @@ docker login your-registry.com
 docker images | grep dex
 
 # Manual tag and push
-docker tag dex:v2.39.1-0.1.4 your-registry.com/dex:v2.39.1-0.1.4
-docker push your-registry.com/dex:v2.39.1-0.1.4
+docker tag dex:v2.39.1-0.1.7 your-registry.com/dex:v2.39.1-0.1.7
+docker push your-registry.com/dex:v2.39.1-0.1.7
 ```
 
 ## 📞 Support
