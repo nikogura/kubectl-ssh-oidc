@@ -15,7 +15,7 @@ endef
 
 # Check for rate limiting and provide informative fallbacks
 # Updated fallbacks to more recent versions
-DEX_VERSION ?= $(call get_latest_release,dexidp/dex,v2.39.1)
+DEX_VERSION ?= $(call get_latest_release,dexidp/dex,v2.43.1)
 KUBECTL_SSH_OIDC_VERSION ?= $(call get_latest_release,nikogura/kubectl-ssh-oidc,v0.1.13)
 
 # Container repository settings - customize for your repository
@@ -88,9 +88,9 @@ versions:
 	if echo "$$dex_response" | grep -q '"tag_name"'; then \
 		echo "Dex latest release: $$(echo "$$dex_response" | jq -r '.tag_name')"; \
 	elif echo "$$dex_response" | grep -q "rate limit"; then \
-		echo "Dex latest release: Rate limited (using fallback: v2.39.1)"; \
+		echo "Dex latest release: Rate limited (using fallback: v2.43.1)"; \
 	else \
-		echo "Dex latest release: API error (using fallback: v2.39.1)"; \
+		echo "Dex latest release: API error (using fallback: v2.43.1)"; \
 	fi
 	@echo
 	@kubectl_response=$$(curl -s https://api.github.com/repos/nikogura/kubectl-ssh-oidc/releases/latest 2>/dev/null); \
@@ -107,7 +107,7 @@ versions:
 	@echo "  KUBECTL_SSH_OIDC_VERSION=$(KUBECTL_SSH_OIDC_VERSION)"
 	@echo
 	@echo "Note: GitHub API has a rate limit of 60 requests/hour for unauthenticated requests."
-	@echo "If rate limited, the build uses recent known-good fallback versions (Dex v2.39.1, kubectl-ssh-oidc v0.1.13)."
+	@echo "If rate limited, the build uses recent known-good fallback versions (Dex v2.43.1, kubectl-ssh-oidc v0.1.13)."
 
 check-repo:
 ifndef CONTAINER_REPO
@@ -166,6 +166,6 @@ help:
 	@echo "    make CONTAINER_REPO=gcr.io/your-project-id/dex build tag push"
 	@echo
 	@echo "Example Usage:"
-	@echo "  make build                                        # Build locally (dex:dex-v2.39.1-kubectl-ssh-oidc-v0.1.13)"
+	@echo "  make build                                        # Build locally (dex:dex-v2.43.1-kubectl-ssh-oidc-v0.1.13)"
 	@echo "  make CONTAINER_REPO=my.registry.com/dex push      # Build and push to repository"
 	@echo "  make DEX_VERSION=v2.40.0 build                    # Build with specific Dex version"

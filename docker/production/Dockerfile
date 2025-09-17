@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 ARG DEX_VERSION=v2.39.1
 ARG KUBECTL_SSH_OIDC_VERSION=main
@@ -24,11 +24,7 @@ RUN mkdir -p dex/connector/ssh
 RUN cp kubectl-ssh-oidc/pkg/ssh/ssh.go dex/connector/ssh/ssh.go && \
     cp kubectl-ssh-oidc/pkg/ssh/version.go dex/connector/ssh/version.go
 
-# Patch SSH connector for Dex v2.39.1+ compatibility
-RUN cd dex/connector/ssh && \
-    sed -i 's|"github.com/dexidp/dex/connector"|"github.com/dexidp/dex/connector"\n\t"github.com/dexidp/dex/pkg/log"|' ssh.go && \
-    sed -i 's|func (c \*Config) Open(id string, logger interface{})|func (c *Config) Open(id string, logger log.Logger)|' ssh.go && \
-    sed -i 's|logger interface{}|logger log.Logger|' ssh.go
+# SSH connector already uses slog.Logger in source code - no patches needed
 
 # Add SSH connector import to Dex and custom endpoint routing
 RUN cd dex && \
@@ -113,7 +109,7 @@ func (s *Server) handleSSHDirectToken(w http.ResponseWriter, r *http.Request) {
 }
 EOF
 
-# Add JOSE dependency for SSH connector (v4 to match Dex v2.39.1)
+# Add JOSE dependency for SSH connector (v4 to match Dex v2.43.1)
 RUN cd dex && \
     go mod edit -require github.com/go-jose/go-jose/v4@v4.0.1 && \
     go mod tidy

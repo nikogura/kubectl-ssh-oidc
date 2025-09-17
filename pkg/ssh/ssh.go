@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -80,26 +81,23 @@ type UserInfo struct {
 // SSHConnector implements the Dex connector interface for SSH key authentication.
 type SSHConnector struct {
 	config          Config
-	logger          interface{}
+	logger          *slog.Logger
 	signingKeys     []*rsa.PrivateKey // Multiple Dex RSA signing keys to try
 	keyIDs          []string          // Corresponding key IDs for JWT headers
 	currentKeyIndex int               // Index of currently selected key
 }
 
 // Open creates a new SSH connector.
-// The logger parameter is interface{} for compatibility with different Dex versions:
-// - Older versions (v2.13.0+incompatible) use interface{}
-// - Newer versions (v2.39.1+) use log.Logger
-// When integrating with newer Dex versions, cast logger to log.Logger as needed.
-func (c *Config) Open(id string, logger interface{}) (connector.Connector, error) {
+// Uses slog.Logger for compatibility with Dex v2.44.0+.
+func (c *Config) Open(id string, logger *slog.Logger) (connector.Connector, error) {
 	// Log version information when SSH connector starts up
 	version := GetVersion()
 
-	// Try to log using different logger interfaces for compatibility
-	if dexLogger, ok := logger.(interface{ Infof(string, ...interface{}) }); ok {
-		dexLogger.Infof("SSH connector starting - version: %s", version)
+	// Log using slog.Logger
+	if logger != nil {
+		logger.Info("SSH connector starting", "version", version)
 	} else {
-		// Fallback: use fmt if logger interface is not available
+		// Fallback: use fmt if logger is not available
 		fmt.Printf("SSH connector starting - version: %s\n", version)
 	}
 
@@ -901,19 +899,12 @@ func (c *SSHConnector) logAuditEvent(eventType, username, keyFingerprint, issuer
 	logMsg := fmt.Sprintf("SSH_AUDIT: type=%s username=%s key=%s issuer=%s status=%s details=%q",
 		eventType, username, keyFingerprint, issuer, status, details)
 
-	// Try to use the Dex logger if available (different versions have different interfaces)
-	if infofLogger, ok := c.logger.(interface{ Infof(string, ...interface{}) }); ok {
-		// Dex v2.39.1+ style logger
-		infofLogger.Infof(logMsg)
-	} else if infoLogger, ok2 := c.logger.(interface{ Info(string, ...interface{}) }); ok2 {
-		// Alternative logger interface
-		infoLogger.Info(logMsg)
-	} else if printfLogger, ok3 := c.logger.(interface{ Printf(string, ...interface{}) }); ok3 {
-		// Printf-style logger
-		printfLogger.Printf(logMsg)
+	// Use slog.Logger for audit logging
+	if c.logger != nil {
+		c.logger.Info(logMsg)
 	} else {
 		// Fallback: use standard output for audit logging
-		// This ensures audit events are always logged even if logger interface is unavailable
+		// This ensures audit events are always logged even if logger is unavailable
 		fmt.Printf("%s\n", logMsg)
 	}
 }
