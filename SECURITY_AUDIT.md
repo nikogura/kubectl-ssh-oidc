@@ -23,7 +23,7 @@ The kubectl-ssh-oidc authentication system demonstrates excellent security pract
 - **Secure SSH Key Discovery**: kubectl plugin follows standard SSH client patterns for key discovery from agent and filesystem
 - **Proper Passphrase Handling**: Interactive terminal prompts with 3-attempt limit for encrypted keys
 - **Key Isolation**: Keys properly scoped per user in Dex SSH connector configuration
-- **Key Configuration**: Dex SSH connector uses SHA256 fingerprints in administrative configuration for key authorization
+- **Key Configuration**: Dex SSH connector uses full SSH public keys in administrative configuration for secure key authorization
 
 #### 2. **Strong OAuth2 Token Exchange Flow**
 - **RFC 8693 Compliance**: Implements OAuth2 Token Exchange standard for secure token exchange
@@ -63,9 +63,9 @@ The kubectl-ssh-oidc authentication system demonstrates excellent security pract
 #### 8. **Comprehensive Audit Logging** ✅
 - **Structured Logging**: Dex SSH connector logs all authentication events with structured format
 - **Success & Failure Tracking**: Logs both successful and failed authentication attempts
-- **Detailed Context**: Includes username, SSH key fingerprint (for logging), issuer, status, and error details
+- **Detailed Context**: Includes username, SSH key type (for logging), issuer, status, and error details
 - **Security Monitoring**: Format optimized for SIEM and log analysis tools
-- **Example**: `SSH_AUDIT: type=auth_success username=alice key=SHA256:abc123... issuer=kubectl-ssh-oidc status=success`
+- **Example**: `SSH_AUDIT: type=auth_success username=alice key=ssh-ed25519 issuer=kubectl-ssh-oidc status=success`
 - **Coverage**: Validates JWT parsing, expired tokens, invalid audience/issuer, unauthorized users/keys
 
 ---
@@ -123,7 +123,7 @@ All dependencies in both components are current and free of known security vulne
 
 ### **Accuracy**: ✅ **EXCELLENT**
 - Comprehensive setup instructions with security considerations
-- Clear SSH key fingerprint extraction examples
+- Clear SSH public key extraction examples
 - Proper credential generation guidance using OpenSSL
 - Well-documented RBAC configuration examples
 

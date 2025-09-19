@@ -60,8 +60,8 @@ kubectl-ssh_oidc https://dex.example.com 2>&1 | grep -A 10 "authentication faile
 # Check SSH agent status
 ssh-add -l
 
-# Verify key fingerprints match Dex configuration
-ssh-keygen -lf ~/.ssh/id_ed25519.pub
+# Get public key for Dex configuration
+cat ~/.ssh/id_ed25519.pub
 ```
 
 ## 🔮 Future Enhancements

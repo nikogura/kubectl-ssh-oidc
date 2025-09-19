@@ -133,39 +133,8 @@ export SSH_USE_AGENT=true   # Default: true
 
 ### 2. Get SSH Key Information for Dex Configuration
 
-The SSH connector supports **two key formats** in Dex configuration. You can use either or both:
+The SSH connector requires users, and their public keys to be configured.
 
-#### Format 1: SSH Fingerprints (Recommended)
-Use SSH fingerprints for the Dex configuration. Use standard SSH tooling:
-
-```bash
-# For any public key file (most common method)
-ssh-keygen -lf ~/.ssh/id_rsa.pub
-ssh-keygen -lf ~/.ssh/id_ed25519.pub  
-ssh-keygen -lf ~/.ssh/id_ecdsa.pub
-
-# For keys loaded in ssh-agent
-ssh-add -l
-
-# For a specific public key file
-ssh-keygen -lf /path/to/your/key.pub
-```
-
-**Example output:**
-```
-2048 SHA256:anwBv8OdPTZNsC3Und/btMdqxE71uYUugjkztuUhLH0 user@hostname (RSA)
-```
-
-**Use the SHA256 portion** (including "SHA256:") in your Dex configuration:
-- ✅ Correct: `"SHA256:anwBv8OdPTZNsC3Und/btMdqxE71uYUugjkztuUhLH0"`
-- ❌ Wrong: `"anwBv8OdPTZNsC3Und/btMdqxE71uYUugjkztuUhLH0"`
-
-```bash
-# Or use make target to show all available fingerprints
-make ssh-fingerprints
-```
-
-#### Format 2: Full SSH Public Keys (Also Supported)
 Alternatively, you can use the complete public key content from your `.pub` files:
 
 ```bash
@@ -184,7 +153,7 @@ ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC9Uxzcz0x... user@hostname
 - ✅ Algorithm and key data are required: `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5...`
 - ✅ Comment/hostname is optional: `ssh-ed25519 AAAAC3... user@hostname` or just `ssh-ed25519 AAAAC3...`
 - ✅ Both formats can be mixed in the same user configuration
-- ✅ The connector automatically handles conversion between formats
+- ✅ The connector ignores the 3rd comment field.
 
 ### 3. Generate Client Credentials
 
@@ -202,7 +171,7 @@ openssl rand -base64 32
 
 > **Important**: This kubectl plugin requires a Dex instance with SSH connector support. The SSH connector is not yet available in upstream Dex. You must use the Dex fork at [github.com/nikogura/dex](https://github.com/nikogura/dex) that includes the SSH connector implementation.
 
-Create or update your Dex configuration (use the fingerprints from step 2 and credentials from step 3):
+Create or update your Dex configuration (use the public keys from step 2 and credentials from step 3):
 
 ```yaml
 # dex-config.yaml
@@ -222,10 +191,6 @@ connectors:
     users:
       "john.doe":
         keys:
-        # Format 1: SSH fingerprints (recommended)
-        - "SHA256:anwBv8OdPTZNsC3Und/btMdqxE71uYUugjkztuUhLH0"
-        - "SHA256:LzKNhWlSG7V7z3nhebyilCadN10jF6mNX6StO8FZ1iM"
-        # Format 2: Full SSH public keys (also supported)
         - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample... user@hostname"
         - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC9Uxzcz0x... user@hostname"
         username: "john.doe"
@@ -237,9 +202,7 @@ connectors:
 
       "jane.smith":
         keys:
-        # You can mix both formats in the same user configuration
-        - "SHA256:7B2+8jXTyF9qK5mPvN3wR8sH6uY4oL1cE5gF2nA7bX0"  # Fingerprint format
-        - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAnother... jane@hostname"  # Full public key format
+        - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAnother... jane@hostname" 
         username: "jane.smith"
         email: "jane.smith@example.com"
         full_name: "Jane Smith"
@@ -578,7 +541,7 @@ make check-ssh
 | `SSH agent not running` | `eval $(ssh-agent -s)` or use `SSH_USE_AGENT=false` |
 | `signature type ssh-ed25519 for key type ssh-rsa` | **Fixed in v0.0.18+**: SSH signature verification now correctly matches key types. Update to latest version. |
 | `JWT token validation failed` / `Unauthorized` | **Fixed in latest**: Implemented multiple token authentication system where Dex returns tokens signed with all available keys, allowing kubectl to select the correct token that matches Kubernetes API server expectations. |
-| `Key not authorized in Dex` | Check fingerprint matches Dex config |
+| `Key not authorized in Dex` | Check public key is configured in Dex |
 | `User not found in Dex` | Set username: `kubectl-ssh-oidc https://dex.example.com kubectl-ssh-oidc your-username` or `export KUBECTL_SSH_USER=your-username` |
 | `Passphrase prompt fails` | Ensure TTY available or use unencrypted keys |
 | `OIDC validation failed` | Verify kube-apiserver OIDC settings |
@@ -673,10 +636,10 @@ This plugin implements a secure JWT-based authentication model designed to preve
   - Enable audit logging in Kubernetes for authentication events
   - SSH connector provides comprehensive audit logs with structured format:
     ```
-    SSH_AUDIT: type=auth_success username=john.doe key=SHA256:L3O7OK+AeW8FbsNuK+YzFbN7TKbGbqaGM6nOtmKrK24 issuer=kubectl-ssh-oidc status=success details="user john.doe authenticated with key SHA256:L3O7OK+AeW8FbsNuK+YzFbN7TKbGbqaGM6nOtmKrK24"
+    SSH_AUDIT: type=auth_success username=john.doe key=ssh-ed25519 issuer=kubectl-ssh-oidc status=success details="user john.doe authenticated with ssh-ed25519 key"
     ```
   - Logs both successful authentications and failed attempts with detailed reasons
-  - Includes username, SSH key fingerprint, issuer, and status for security monitoring
+  - Includes username, SSH key identifier, issuer, and status for security monitoring
 - **Principle of Least Privilege**: Use RBAC to limit user permissions
 
 ## 🚦 Supported Platforms

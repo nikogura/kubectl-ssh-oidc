@@ -171,21 +171,23 @@ check-ssh:
 		ssh-add -l; \
 	fi
 
-# Generate SSH key fingerprints for Dex configuration
-.PHONY: ssh-fingerprints
-ssh-fingerprints: check-ssh
-	@echo "SSH Key Fingerprints for Dex configuration:"
-	@echo "==========================================="
-	@ssh-add -l | while read keysize fingerprint comment keytype; do \
-		echo "  \"$$fingerprint\":"; \
-		echo "    username: \"your-username\""; \
-		echo "    email: \"your-email@example.com\""; \
-		echo "    full_name: \"Your Full Name\""; \
-		echo "    groups:"; \
-		echo "    - \"developers\""; \
-		echo "    - \"kubernetes-users\""; \
-		echo ""; \
+# Generate SSH public keys for Dex configuration
+.PHONY: ssh-keys
+ssh-keys: check-ssh
+	@echo "SSH Public Keys for Dex configuration:"
+	@echo "====================================="
+	@echo "  users:"
+	@echo "    your-username:"
+	@echo "      keys:"
+	@ssh-add -L | while read key; do \
+		echo "        - \"$$key\""; \
 	done
+	@echo "      username: \"your-username\""
+	@echo "      email: \"your-email@example.com\""
+	@echo "      full_name: \"Your Full Name\""
+	@echo "      groups:"
+	@echo "        - \"developers\""
+	@echo "        - \"kubernetes-users\""
 
 # Development helpers
 .PHONY: dev-setup

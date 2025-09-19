@@ -27,23 +27,28 @@ connectors:
   id: ssh
   name: SSH Key Authentication
   config:
-    # Map SSH key fingerprints to user information
-    authorized_keys:
-      "SHA256:abc123def456...": # Replace with actual SSH key fingerprints
+    # Map users to their SSH public keys
+    users:
+      "john.doe":
+        keys:
+          - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample... john.doe@example.com"
+          - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC9Example... john.doe@example.com"
         username: "john.doe"
         email: "john.doe@example.com"
         full_name: "John Doe"
         groups:
-        - "developers"
-        - "kubernetes-users"
-      
-      "SHA256:xyz789uvw456...": # Another SSH key
+          - "developers"
+          - "kubernetes-users"
+
+      "jane.smith":
+        keys:
+          - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAnotherExample... jane.smith@example.com"
         username: "jane.smith"
         email: "jane.smith@example.com"
         full_name: "Jane Smith"
         groups:
-        - "admins"
-        - "kubernetes-admins"
+          - "admins"
+          - "kubernetes-admins"
     
     # JWT issuers that are allowed
     allowed_issuers:

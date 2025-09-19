@@ -50,7 +50,6 @@ connectors:
       users:
         alice:
           keys:
-            - "SHA256:example-fingerprint-alice-ed25519-key-here"
             - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleAlicePublicKeyDataHere alice@example.com"
           groups:
             - admin

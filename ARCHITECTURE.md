@@ -242,7 +242,7 @@ token := jwt.NewWithClaims(&SSHSigningMethod{}, claims)
 **Key Points:**
 - Uses only standard JWT claims: `sub`, `aud`, `jti`, `exp`, `iat`, `nbf`
 - `sub` claim contains username for direct O(1) user lookup
-- No embedded keys or fingerprints for security - verification uses configured keys only
+- No embedded keys for security - verification uses administrator-configured keys only
 - Short 5-minute expiration for security
 
 #### 4. JWT Token Creation and Signing
@@ -408,8 +408,8 @@ func (c *SSHConnector) parseAndVerifyJWTSecurely(tokenString string) (*UserConfi
     }
 
     // Try each of the user's authorized keys
-    for _, keyFingerprint := range userConfig.Keys {
-        if publicKey := c.getPublicKeyByFingerprint(keyFingerprint); publicKey != nil {
+    for _, publicKeyString := range userConfig.Keys {
+        if publicKey, err := ssh.ParseAuthorizedKey([]byte(publicKeyString)); err == nil {
             // Attempt verification with this configured key
             token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
                 if token.Method.Alg() != "SSH" {
@@ -530,14 +530,13 @@ func (c *SSHConnector) authenticateUser(username string, verifiedKey ssh.PublicK
         return nil, fmt.Errorf("user %s not found", username)
     }
 
-    // Generate fingerprint of the verified key
-    keyFingerprint := ssh.FingerprintSHA256(verifiedKey)
-
-    // Verify this key is authorized for this user
-    for _, authorizedKey := range userConfig.Keys {
-        if authorizedKey == keyFingerprint {
-            // Key is authorized - authentication successful
-            userInfo := userConfig.UserInfo
+    // Verify this key is authorized for this user by comparing the actual public keys
+    verifiedKeyBytes := ssh.MarshalAuthorizedKey(verifiedKey)
+    for _, authorizedKeyStr := range userConfig.Keys {
+        if authorizedPublicKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(authorizedKeyStr)); err == nil {
+            if bytes.Equal(ssh.MarshalAuthorizedKey(authorizedPublicKey), verifiedKeyBytes) {
+                // Key is authorized - authentication successful
+                userInfo := userConfig.UserInfo
             if userInfo.Username == "" {
                 userInfo.Username = username
             }
@@ -545,15 +544,14 @@ func (c *SSHConnector) authenticateUser(username string, verifiedKey ssh.PublicK
         }
     }
 
-    return nil, fmt.Errorf("key %s not authorized for user %s", keyFingerprint, username)
+    return nil, fmt.Errorf("key not authorized for user %s", username)
 }
 
-// Helper to retrieve public key by fingerprint from configuration
-func (c *SSHConnector) getPublicKeyByFingerprint(fingerprint string) ssh.PublicKey {
-    // This would lookup the actual public key from a key store
-    // Implementation depends on how public keys are stored/configured
-    // Could be from filesystem, database, or embedded in config
-    return c.keyStore.GetPublicKey(fingerprint)
+// Helper to parse public key from configuration string
+func (c *SSHConnector) parseConfiguredPublicKey(keyString string) (ssh.PublicKey, error) {
+    // Parse the public key string in authorized_keys format
+    publicKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(keyString))
+    return publicKey, err
 }
 ```
 
