@@ -480,15 +480,13 @@ func tryUnifiedKeyAuthentication(sshKey *SSHKey, config *Config, sshClient *Unif
 	// Create JWT claims - minimal, standards-compliant approach like jwt-ssh-agent
 	now := time.Now()
 	claims := jwt.MapClaims{
-		"iss":             "kubectl-ssh-oidc",                             // Issuer
-		"sub":             config.Username,                                // Subject (username)
-		"aud":             config.Audience,                                // Audience
-		"jti":             jwtID,                                          // JWT ID
-		"exp":             now.Add(5 * time.Minute).Unix(),                // Expires in 5 minutes
-		"iat":             now.Unix(),                                     // Issued at
-		"nbf":             now.Unix(),                                     // Not before
-		"key_fingerprint": sshKey.Fingerprint,                             // SSH key fingerprint for server lookup
-		"public_key":      base64.StdEncoding.EncodeToString(sshKey.Blob), // For signature verification
+		"iss": "kubectl-ssh-oidc",              // Issuer
+		"sub": config.Username,                 // Subject (username)
+		"aud": config.Audience,                 // Audience
+		"jti": jwtID,                           // JWT ID
+		"exp": now.Add(5 * time.Minute).Unix(), // Expires in 5 minutes
+		"iat": now.Unix(),                      // Issued at
+		"nbf": now.Unix(),                      // Not before
 	}
 
 	// Create JWT with custom SSH signing method for unified keys
@@ -670,12 +668,22 @@ func selectBestToken(tokenResponse *DexTokenResponse) (string, error) {
 // createTokenRequest creates an HTTP request for token exchange.
 func createTokenRequest(config *Config, sshJWT string) (*http.Request, error) {
 	baseURL := strings.TrimSuffix(config.DexURL, "/")
-	tokenURL := baseURL + "/auth/ssh/token"
 
+	// Use OAuth2 Token Exchange (TokenIdentityConnector)
+	tokenURL := baseURL + "/token"
 	formData := url.Values{
-		"ssh_jwt":   {sshJWT},
-		"client_id": {config.ClientID},
+		"grant_type":           {"urn:ietf:params:oauth:grant-type:token-exchange"},
+		"subject_token_type":   {"urn:ietf:params:oauth:token-type:access_token"},
+		"subject_token":        {sshJWT},
+		"requested_token_type": {"urn:ietf:params:oauth:token-type:id_token"}, // Request ID token for Kubernetes
+		"scope":                {"openid email groups profile"},               // Required scopes for Kubernetes OIDC
+		"connector_id":         {"ssh"},                                       // Required by Dex
+		"client_id":            {config.ClientID},
 	}
+	if config.ClientSecret != "" {
+		formData.Set("client_secret", config.ClientSecret)
+	}
+
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, tokenURL, strings.NewReader(formData.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create token request: %w", err)
@@ -683,10 +691,6 @@ func createTokenRequest(config *Config, sshJWT string) (*http.Request, error) {
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-
-	if config.ClientSecret != "" {
-		req.SetBasicAuth(config.ClientID, config.ClientSecret)
-	}
 
 	return req, nil
 }

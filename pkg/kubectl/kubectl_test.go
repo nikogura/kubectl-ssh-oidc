@@ -41,7 +41,7 @@ import (
 	clientauthv1 "k8s.io/client-go/pkg/apis/clientauthentication/v1"
 
 	"github.com/nikogura/kubectl-ssh-oidc/pkg/kubectl/mocks"
-	"github.com/nikogura/kubectl-ssh-oidc/testdata"
+	"github.com/nikogura/kubectl-ssh-oidc/test/helpers"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -129,7 +129,7 @@ func TestSSHAgentClient_GetKeys(t *testing.T) {
 		{
 			name: "success with keys",
 			mockSetup: func(m *mocks.MockExtendedAgent) {
-				testKey, err := testdata.CreateTestAgentKey()
+				testKey, err := helpers.CreateTestAgentKey()
 				require.NoError(t, err)
 				m.On("List").Return([]*agent.Key{testKey}, nil)
 			},
@@ -183,12 +183,12 @@ func TestSSHAgentClient_SignData(t *testing.T) {
 		{
 			name: "successful signing",
 			mockSetup: func(m *mocks.MockExtendedAgent) {
-				testKey, err := testdata.CreateTestAgentKey()
+				testKey, err := helpers.CreateTestAgentKey()
 				require.NoError(t, err)
 
 				m.On("List").Return([]*agent.Key{testKey}, nil)
 				m.On("Sign", mock.AnythingOfType("*agent.Key"), mock.AnythingOfType("[]uint8")).
-					Return(testdata.TestSSHSignature(), nil)
+					Return(helpers.TestSSHSignature(), nil)
 			},
 			data: []byte("test data to sign"),
 		},
@@ -203,7 +203,7 @@ func TestSSHAgentClient_SignData(t *testing.T) {
 		{
 			name: "signing fails",
 			mockSetup: func(m *mocks.MockExtendedAgent) {
-				testKey, err := testdata.CreateTestAgentKey()
+				testKey, err := helpers.CreateTestAgentKey()
 				require.NoError(t, err)
 
 				m.On("List").Return([]*agent.Key{testKey}, nil)
@@ -250,7 +250,7 @@ func TestSSHAgentClient_SignWithKey(t *testing.T) {
 			name: "successful signing with specific key",
 			mockSetup: func(m *mocks.MockExtendedAgent, key *agent.Key) {
 				m.On("Sign", key, mock.AnythingOfType("[]uint8")).
-					Return(testdata.TestSSHSignature(), nil)
+					Return(helpers.TestSSHSignature(), nil)
 			},
 			data: []byte("test data to sign"),
 		},
@@ -268,7 +268,7 @@ func TestSSHAgentClient_SignWithKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockAgent := &mocks.MockExtendedAgent{}
-			testKey, err := testdata.CreateTestAgentKey()
+			testKey, err := helpers.CreateTestAgentKey()
 			require.NoError(t, err)
 
 			tt.mockSetup(mockAgent, testKey)
@@ -302,7 +302,7 @@ func TestCreateSSHSignedJWT(t *testing.T) {
 
 		// Create mock signed JWT response (base64 encoded JSON)
 		signedJWT := SSHSignedJWT{
-			Token:     "test.jwt.token",
+			Token:     "helpers.jwt.token",
 			Signature: base64.StdEncoding.EncodeToString([]byte("test-signature")),
 			Format:    "rsa-sha2-256",
 		}
@@ -347,7 +347,7 @@ func TestTryKeyAuthentication(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create test SSH key
-			testKey, err := testdata.CreateTestAgentKey()
+			testKey, err := helpers.CreateTestAgentKey()
 			require.NoError(t, err)
 			testKey.Comment = tt.keyComment
 
@@ -364,7 +364,7 @@ func TestTryKeyAuthentication(t *testing.T) {
 
 			// Set up mock to return test signature
 			mockAgent.On("Sign", testKey, mock.AnythingOfType("[]uint8")).
-				Return(testdata.TestSSHSignature(), nil)
+				Return(helpers.TestSSHSignature(), nil)
 
 			// Test key authentication
 			signedJWT, err := tryKeyAuthentication(testKey, config, sshClient)
@@ -453,10 +453,10 @@ func TestExchangeWithDex(t *testing.T) {
 				DexURL:   "https://test-dex.example.com",
 				ClientID: "test-client",
 			},
-			sshJWT: "test.ssh.jwt",
+			sshJWT: "helpers.ssh.jwt",
 			mockResponse: &http.Response{
 				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(testdata.TestDexTokenResponse())),
+				Body:       io.NopCloser(strings.NewReader(helpers.TestDexTokenResponse())),
 			},
 			expectedToken: &DexTokenResponse{
 				AccessToken:  "test-access-token",
@@ -472,7 +472,7 @@ func TestExchangeWithDex(t *testing.T) {
 				DexURL:   "https://test-dex.example.com",
 				ClientID: "test-client",
 			},
-			sshJWT: "test.ssh.jwt",
+			sshJWT: "helpers.ssh.jwt",
 			mockResponse: &http.Response{
 				StatusCode: http.StatusUnauthorized,
 				Body:       io.NopCloser(strings.NewReader(`{"error": "invalid_grant"}`)),
@@ -584,13 +584,13 @@ func TestCreateSSHSignedJWT_MultipleKeys(t *testing.T) {
 		// Test successful key authentication
 		t.Run("successful key authentication", func(t *testing.T) {
 			mockClient := &mocks.MockSSHAgentClient{}
-			testKey := testdata.TestKey1()
+			testKey := helpers.TestKey1()
 
 			signature := &ssh.Signature{
 				Format: "rsa-sha2-256",
 				Blob:   []byte("mock-signature"),
 			}
-			pubKey, _ := testdata.TestPublicKey1()
+			pubKey, _ := helpers.TestPublicKey1()
 			mockClient.On("SignWithKey", testKey, mock.AnythingOfType("[]uint8")).Return(signature, pubKey, nil).Once()
 
 			result, err := tryKeyAuthentication(testKey, config, mockClient)
@@ -615,7 +615,7 @@ func TestCreateSSHSignedJWT_MultipleKeys(t *testing.T) {
 		// Test failed key authentication
 		t.Run("failed key authentication", func(t *testing.T) {
 			mockClient := &mocks.MockSSHAgentClient{}
-			testKey := testdata.TestKey1()
+			testKey := helpers.TestKey1()
 
 			mockClient.On("SignWithKey", testKey, mock.AnythingOfType("[]uint8")).Return(nil, nil, errors.New("signing failed")).Once()
 
@@ -653,7 +653,7 @@ func TestKeyIterationBehavior(t *testing.T) {
 	})
 
 	t.Run("test SSH key parsing and fingerprinting", func(t *testing.T) {
-		testKey := testdata.TestKey1()
+		testKey := helpers.TestKey1()
 
 		// This should parse without error since we generate valid keys now
 		pubKey, err := ssh.ParsePublicKey(testKey.Blob)
@@ -666,7 +666,7 @@ func TestKeyIterationBehavior(t *testing.T) {
 }
 
 func TestSSHJWTClaimsValidation(t *testing.T) {
-	testKey, _, publicKeyBytes, err := testdata.GenerateTestSSHKey()
+	testKey, _, publicKeyBytes, err := helpers.GenerateTestSSHKey()
 	require.NoError(t, err)
 
 	fingerprint := ssh.FingerprintSHA256(testKey)

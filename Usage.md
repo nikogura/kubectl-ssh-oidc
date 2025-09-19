@@ -1,6 +1,6 @@
 # kubectl-ssh-oidc
 
-A kubectl plugin that provides passwordless authentication to Kubernetes clusters using SSH keys from ssh-agent or filesystem and Dex Identity Provider.
+A kubectl plugin that provides passwordless authentication to Kubernetes clusters using SSH keys and Dex Identity Provider with OAuth2 Token Exchange (RFC 8693).
 
 ## Overview
 
@@ -8,9 +8,9 @@ This plugin combines:
 - **Flexible SSH Key Authentication**: Uses SSH keys from ssh-agent or filesystem
 - **Standard SSH Behavior**: Follows SSH client key discovery and iteration patterns
 - **JWT Signing**: Creates standards-compliant JWTs signed with your SSH private key
+- **OAuth2 Token Exchange**: Uses RFC 8693 standard for token exchange with Dex
 - **Passphrase Support**: Interactive prompts for encrypted private keys
-- **Dex Integration**: Exchanges SSH-signed JWTs for OIDC tokens
-- **Kubernetes Access**: Seamlessly authenticates with kubectl
+- **OIDC Integration**: Seamlessly integrates with Kubernetes OIDC authentication
 
 ## Architecture
 
@@ -21,7 +21,7 @@ kubectl → kubectl-ssh-oidc → [ssh-agent | ~/.ssh/id_*] → Dex IDP → Kuber
 ## Prerequisites
 
 1. **SSH Keys**: SSH agent with loaded keys OR filesystem keys in standard locations (flexible)
-2. **Dex**: Configured with the custom SSH connector
+2. **Dex**: Using the SSH connector fork at [github.com/nikogura/dex](https://github.com/nikogura/dex)
 3. **Kubernetes**: Cluster configured to accept OIDC tokens from Dex
 
 ## Installation
@@ -110,32 +110,29 @@ export SSH_IDENTITIES_ONLY=true
 kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
 ```
 
-### 2. Get SSH Key Fingerprints
+### 2. Get SSH Public Keys
 
-Generate fingerprints for Dex configuration:
+Get public keys for Dex configuration:
 
 ```bash
-# For agent keys
-ssh-add -l
+# For agent keys (get public key content)
+ssh-add -L
 
-# For filesystem keys
-ssh-keygen -lf ~/.ssh/id_ed25519.pub
-ssh-keygen -lf ~/.ssh/id_rsa.pub
+# For filesystem keys (get public key content)
+cat ~/.ssh/id_ed25519.pub
+cat ~/.ssh/id_rsa.pub
 
 # For all keys in standard locations
 for key in ~/.ssh/id_*.pub; do
-  [ -f "$key" ] && ssh-keygen -lf "$key"
+  [ -f "$key" ] && echo "=== $key ===" && cat "$key"
 done
-
-# Or use make target (shows all discoverable keys from both agent and filesystem)
-make ssh-fingerprints
 ```
 
 ### 3. Configure Dex
 
 Update your Dex configuration with the SSH connector and user keys:
 
-#### Option A: Multiple Keys Per User (Recommended)
+#### Full Public Key Configuration (Required)
 
 ```yaml
 connectors:
@@ -146,9 +143,9 @@ connectors:
     users:
       "your-username":
         keys:
-        - "SHA256:your-work-key-fingerprint"
-        - "SHA256:your-home-key-fingerprint"
-        - "SHA256:your-yubikey-fingerprint"
+        - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIYour-actual-public-key-data-here your-username@work-laptop"
+        - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC... your-username@home-desktop"
+        - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIYubikey-ssh-key-data-here your-username@yubikey"
         username: "your-username"
         email: "your-email@example.com"
         full_name: "Your Full Name"
@@ -165,31 +162,7 @@ connectors:
     token_ttl: 3600
 ```
 
-#### Option B: Legacy Format (Single Key Per User)
-
-```yaml
-connectors:
-- type: ssh
-  id: ssh
-  name: SSH Key Authentication
-  config:
-    authorized_keys:
-      "SHA256:your-ssh-key-fingerprint":
-        username: "your-username"
-        email: "your-email@example.com"
-        full_name: "Your Full Name"
-        groups:
-        - "developers"
-        - "kubernetes-users"
-    
-    allowed_issuers:
-    - "kubectl-ssh-oidc"
-    
-    default_groups:
-    - "authenticated"
-    
-    token_ttl: 3600
-```
+**Security Note**: Only full SSH public keys are supported. Fingerprints are no longer accepted for security reasons - they previously allowed key injection attacks.
 
 ### 4. Configure kubectl
 
@@ -315,30 +288,23 @@ kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc
 
 ## Dex Connector Installation
 
-### 1. Build Custom Dex
+### 1. Use Dex Fork with SSH Connector
 
-The SSH connector needs to be compiled into Dex. The integration has been tested and validated with Dex v2.39.1:
+**Important**: You must use the Dex fork that includes the SSH connector with OAuth2 Token Exchange support:
 
 ```bash
-# Clone Dex (tested with v2.39.1)
-git clone --branch=v2.39.1 --depth=1 https://github.com/dexidp/dex
+# Clone the Dex fork with SSH connector
+git clone https://github.com/nikogura/dex
 cd dex
 
-# Create SSH connector directory
-mkdir -p connector/ssh
+# Build Dex with SSH connector
+make build
 
-# Copy the SSH connector from this repository
-curl -sSL https://raw.githubusercontent.com/nikogura/kubectl-ssh-oidc/main/pkg/ssh/ssh.go -o connector/ssh/ssh.go
-
-# Add SSH connector import to server/server.go (NOT cmd/dex/serve.go)
-sed -i '/\"github.com\/dexidp\/dex\/connector\/oidc\"/a\\t\"github.com/dexidp/dex/connector/ssh\"' server/server.go
-
-# Add SSH connector to ConnectorsConfig map in server/server.go
-sed -i '/\"oidc\":[[:space:]]*func()/a\\t\"ssh\":            func() ConnectorConfig { return new(ssh.Config) },' server/server.go
-
-# Build Dex with CGO support (required for SQLite3)
-CGO_ENABLED=1 make build
+# Or build Docker container
+docker build -t dex-ssh:latest .
 ```
+
+**Alternative**: Build Docker containers directly from the fork using the provided Dockerfile.
 
 ### 2. Deploy Dex
 
@@ -427,7 +393,7 @@ kubectl-ssh_oidc https://dex.example.com
 |-------|-----------|----------|
 | No SSH keys in agent | `ssh-add -l` shows no keys | `ssh-add ~/.ssh/id_ed25519` |
 | SSH agent not running | `SSH_AUTH_SOCK` not set | `eval $(ssh-agent -s)` |
-| Key not authorized in Dex | Plugin returns auth error | Check fingerprint matches Dex config |
+| Key not authorized in Dex | Plugin returns auth error | Check public key matches Dex config |
 | Token expired | Authentication fails | Plugin should auto-refresh, check Dex logs |
 | OIDC not configured | kubectl auth fails | Verify kube-apiserver OIDC settings |
 | Permission denied | kubectl commands fail | Check RBAC configuration |
@@ -444,7 +410,7 @@ SSH_AUDIT: type=auth_attempt username=jane.doe key=SHA256:abc123... issuer=kubec
 These logs include:
 - **type**: Event type (auth_success, auth_attempt)
 - **username**: User attempting authentication
-- **key**: SSH key fingerprint used
+- **key**: SSH key comment/identifier used
 - **issuer**: JWT issuer identifier
 - **status**: success or failed
 - **details**: Additional context or error message
@@ -455,8 +421,8 @@ These logs include:
 # Check SSH agent status
 make check-ssh
 
-# Generate fingerprints for Dex config
-make ssh-fingerprints
+# Get public keys for Dex config
+ssh-add -L  # or cat ~/.ssh/*.pub
 
 # Test plugin directly
 kubectl-ssh_oidc https://dex.example.com kubectl-ssh-oidc your-username

@@ -70,43 +70,18 @@ test-coverage: test
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
 
-# Run integration tests with custom Dex (includes unit tests and lint as prerequisites)
+# Run integration tests (requires running Dex instance with SSH connector)
 .PHONY: test-integration
 test-integration: test lint
-	@echo "Running end-to-end integration tests..."
+	@echo "Running integration tests..."
 	@echo "✅ Unit tests and lint checks passed - proceeding with integration tests"
-	./test/integration/run-integration-tests.sh
+	@echo "Note: Requires DEX_URL, CLIENT_ID, KUBECTL_SSH_USER environment variables and SSH agent"
+	go test -v -timeout 120s -tags integration .
 
-# Run full local integration tests with Go (fast version)
-.PHONY: test-integration-local
-test-integration-local: test lint
-	@echo "Running local integration tests with Go..."
-	@echo "✅ Unit tests and lint checks passed - proceeding with integration tests"
-	INTEGRATION_TEST=true go test -v -timeout 120s ./test/integration
-
-# Run all tests (unit + integration)
+# Run all tests (unit + lint + integration)
 .PHONY: test-all
 test-all: test lint test-integration
 	@echo "✅ All tests passed (unit + lint + integration)!"
-
-# Build custom Dex image for integration testing
-.PHONY: build-dex
-build-dex:
-	@echo "Building custom Dex image with SSH connector..."
-	docker build -f docker/integration-testing/Dockerfile -t kubectl-ssh-oidc/dex:latest .
-
-# Verify custom Dex image works correctly
-.PHONY: verify-dex
-verify-dex:
-	@echo "Verifying custom Dex image..."
-	./test/integration/run-integration-tests.sh --verify
-
-# Clean up integration test containers and images
-.PHONY: clean-integration
-clean-integration:
-	@echo "Cleaning up integration test environment..."
-	./test/integration/run-integration-tests.sh --cleanup
-	docker images -q "kubectl-ssh-oidc/dex" | xargs -r docker rmi -f 2>/dev/null || true
 
 # Lint the code
 .PHONY: lint
@@ -161,14 +136,11 @@ help:
 	@echo "  install-system  Install system-wide (requires sudo)"
 	@echo "  test            Run unit tests"
 	@echo "  test-coverage   Run tests with coverage report"
-	@echo "  test-integration Run end-to-end integration tests (shell script approach)"
-	@echo "  test-integration-local Run local Go integration tests (fast, GitHub Actions compatible)"
+	@echo "  test-integration Run integration tests (requires running Dex instance)"
 	@echo "  test-all        Run all tests (unit + lint + integration)"
 	@echo "  test-manual     Test authentication with deployed Dex (requires env vars)"
 	@echo "  test-kubectl-debug Diagnose kubectl exec plugin integration issues"
 	@echo "  test-kubectl-e2e End-to-end kubectl test using existing config"
-	@echo "  verify-dex      Verify custom Dex image works"
-	@echo "  clean-integration Clean integration test environment"
 	@echo "  lint            Lint the code"
 	@echo "  fmt             Format the code"
 	@echo "  tidy            Tidy dependencies"

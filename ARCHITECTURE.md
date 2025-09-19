@@ -1,6 +1,6 @@
 # kubectl-ssh-oidc Architecture
 
-This document provides detailed technical documentation of the kubectl-ssh-oidc implementation, including the SSH agent signing flow and user matching mechanisms.
+This document provides detailed technical documentation of the kubectl-ssh-oidc authentication system, including the SSH agent signing flow, OAuth2 Token Exchange, and the interaction between the kubectl plugin and Dex SSH connector.
 
 ## 🏗️ System Architecture
 
@@ -29,7 +29,7 @@ graph TB
     
     subgraph "User Mapping"
         O[Username in JWT sub] --> P[Direct User Lookup]
-        Q[SSH Key Fingerprint] --> R[Verify Key Authorized]
+        Q[JWT Signature Verification] --> R[Verify Against Configured Keys]
         P --> S[User Identity]
         R --> S[User Identity]
     end
@@ -39,7 +39,61 @@ graph TB
 
 ### Overview
 
-The plugin supports both SSH agent and filesystem keys, following standard SSH client behavior. It tries each available key in sequence until authentication succeeds. The JWT contains a username claim (sub) for direct user lookup and includes key fingerprint for authorization verification.
+The plugin supports both SSH agent and filesystem keys, following standard SSH client behavior. It tries each available key in sequence until authentication succeeds. The JWT contains only standard claims (sub, aud, iss, exp, iat, nbf, jti) with no SSH key material - all key verification is performed by Dex using administrator-configured keys.
+
+## TokenIdentityConnector Pattern
+
+### Non-Web OAuth2 Token Exchange Architecture
+
+The Dex SSH connector implements the `TokenIdentityConnector` interface, using OAuth2 Token Exchange (RFC 8693) where **Dex validates SSH-signed JWTs from the kubectl plugin**. The SSH connector is currently available in [github.com/nikogura/dex](https://github.com/nikogura/dex) and will be presented to the upstream Dex project for integration.
+
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────┐
+│ kubectl plugin  │───▶│ Dex SSH Connector│───▶│    Dex      │
+│ (creates JWT)   │    │ (validates JWT)  │    │ (issues     │
+│                 │    │                  │    │  OIDC tokens)│
+└─────────────────┘    └──────────────────┘    └─────────────┘
+  OAuth2 Client           Token Validator       OIDC Server
+```
+
+### Components:
+
+- **kubectl plugin**: Creates SSH-signed JWTs and performs OAuth2 Token Exchange
+- **Dex SSH connector**: Validates SSH signatures and authorizes users
+- **Dex OIDC server**: Issues standard OIDC ID tokens for Kubernetes
+
+### Authentication Method Separation
+
+Dex delegates identity determination to the connector through `TokenIdentity()`:
+
+```go
+func (c *SSHConnector) TokenIdentity(ctx context.Context, subjectTokenType, subjectToken string) (connector.Identity, error) {
+    // 1. Parse JWT to extract claimed username (UNTRUSTED until verification)
+    // 2. Look up user and their authorized public keys
+    // 3. Try cryptographic verification against all authorized public keys
+    // 4. Return identity from administrative configuration (TRUSTED)
+    // 5. Return error if no configured key can verify the JWT
+}
+```
+
+**Security Model:**
+- Dex SSH connector performs all cryptographic validation
+- Dex trusts the identity determination if validation succeeds
+- Dex applies its own policies (scopes, clients, token generation)
+
+### Comparison with Web Flows
+
+**Traditional Web Connectors:**
+- User → Browser → OAuth Provider → Dex
+- Interactive, redirect-based
+- Requires web interface
+
+**SSH TokenIdentityConnector:**
+- Client → SSH-signed JWT → Dex
+- Non-interactive, cryptographic
+- No web interface required
+
+Both patterns serve different use cases within Dex's pluggable connector architecture.
 
 ### Detailed Flow
 
@@ -179,8 +233,6 @@ claims := jwt.MapClaims{
     "exp": time.Now().Add(5*time.Minute).Unix(), // Short expiration
     "iat": time.Now().Unix(),            // Issued at
     "nbf": time.Now().Unix(),            // Not before
-    "key_fingerprint": fingerprint,      // SSH key fingerprint for authorization check
-    "public_key": base64.StdEncoding.EncodeToString(pubKeyBlob), // Public key for verification
 }
 
 // Create JWT token
@@ -188,10 +240,9 @@ token := jwt.NewWithClaims(&SSHSigningMethod{}, claims)
 ```
 
 **Key Points:**
-- Uses standard JWT claims: `sub`, `aud`, `jti`, `exp` (following jwt-ssh-agent pattern)
+- Uses only standard JWT claims: `sub`, `aud`, `jti`, `exp`, `iat`, `nbf`
 - `sub` claim contains username for direct O(1) user lookup
-- `key_fingerprint` used to verify the key is authorized for this user
-- `public_key` embedded for signature verification
+- No embedded keys or fingerprints for security - verification uses configured keys only
 - Short 5-minute expiration for security
 
 #### 4. JWT Token Creation and Signing
@@ -301,55 +352,85 @@ type Config struct {
 
 ### Overview
 
-The Dex SSH connector uses JWT-based authentication with direct username lookup (O(1) performance) and SSH key authorization verification. The username comes from the JWT `sub` claim, eliminating the need to search through all users.
+The Dex SSH connector uses JWT-based authentication with secure signature verification against administrator-configured keys only. The username comes from the JWT `sub` claim for direct user lookup, and JWT signatures are verified only against SSH keys explicitly configured for that user in the Dex configuration. No SSH key material is embedded in JWTs.
 
 ### Detailed Flow
 
-#### 1. JWT Reception and Parsing (jwt-ssh-agent approach)
-**File:** `pkg/ssh/ssh.go:93-130`
+#### 1. Secure JWT Verification Against Configured Keys
+**Implementation:** Dex SSH connector
 
 ```go
 func (c *SSHConnector) validateSSHJWT(sshJWTString string) (connector.Identity, error) {
-    // Register SSH signing method for JWT parsing
-    jwt.RegisterSigningMethod("SSH", func() jwt.SigningMethod {
-        return &SSHSigningMethodServer{}
+    // Parse and verify JWT securely using only configured keys
+    user, verifiedKey, err := c.parseAndVerifyJWTSecurely(sshJWTString)
+    if err != nil {
+        return connector.Identity{}, fmt.Errorf("JWT verification failed: %w", err)
+    }
+
+    // Create identity from verified user info
+    identity := connector.Identity{
+        UserID:        user.UserInfo.Username,
+        Username:      user.UserInfo.Username,
+        Email:         user.UserInfo.Email,
+        EmailVerified: true,
+        Groups:        append(user.UserInfo.Groups, c.config.DefaultGroups...),
+    }
+
+    return identity, nil
+}
+
+// parseAndVerifyJWTSecurely ensures only configured keys can verify JWTs
+func (c *SSHConnector) parseAndVerifyJWTSecurely(tokenString string) (*UserConfig, ssh.PublicKey, error) {
+    // First parse without verification to extract claims
+    unverifiedToken, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+        return []byte("dummy"), nil // We'll do real verification below
     })
+    if err == nil {
+        return nil, nil, err // Should fail here due to dummy key
+    }
 
-    // Parse JWT directly using jwt-ssh-agent approach
-    token, err := jwt.Parse(sshJWTString, func(token *jwt.Token) (interface{}, error) {
-        // Verify signing algorithm is SSH
-        if token.Method.Alg() != "SSH" {
-            return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+    // Extract claims from unverified token
+    claims, ok := unverifiedToken.Claims.(jwt.MapClaims)
+    if !ok {
+        return nil, nil, errors.New("invalid JWT claims format")
+    }
+
+    // Extract username for user lookup
+    username, ok := claims["sub"].(string)
+    if !ok || username == "" {
+        return nil, nil, errors.New("missing or invalid sub claim")
+    }
+
+    // Try verification against each configured key for this user
+    userConfig, exists := c.config.Users[username]
+    if !exists {
+        return nil, nil, fmt.Errorf("user %s not found", username)
+    }
+
+    // Try each of the user's authorized keys
+    for _, keyFingerprint := range userConfig.Keys {
+        if publicKey := c.getPublicKeyByFingerprint(keyFingerprint); publicKey != nil {
+            // Attempt verification with this configured key
+            token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+                if token.Method.Alg() != "SSH" {
+                    return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+                }
+                return publicKey, nil
+            })
+
+            if err == nil && token.Valid {
+                // Success! This key verified the JWT
+                return &userConfig, publicKey, nil
+            }
         }
+    }
 
-        // Extract public key from claims for verification
-        claims, ok := token.Claims.(jwt.MapClaims)
-        if !ok {
-            return nil, errors.New("invalid claims format")
-        }
-
-        publicKeyB64, ok := claims["public_key"].(string)
-        if !ok {
-            return nil, errors.New("missing public_key claim")
-        }
-
-        // Parse SSH public key for verification
-        publicKeyBytes, err := base64.StdEncoding.DecodeString(publicKeyB64)
-        if err != nil {
-            return nil, fmt.Errorf("failed to decode public key: %w", err)
-        }
-
-        publicKey, err := ssh.ParsePublicKey(publicKeyBytes)
-        if err != nil {
-            return nil, fmt.Errorf("failed to parse public key: %w", err)
-        }
-
-        return publicKey, nil
-    })
+    return nil, nil, fmt.Errorf("JWT signature verification failed with all configured keys for user %s", username)
+}
 ```
 
 #### 2. JWT Claims Validation (Standards Compliant)
-**File:** `pkg/ssh/ssh.go:130-180`
+**Implementation:** SSH connector
 
 ```go
 // Extract and validate standard JWT claims
@@ -396,7 +477,7 @@ if time.Unix(int64(exp), 0).Before(time.Now()) {
 ```
 
 #### 3. SSH Signature Verification (Built into JWT parsing)
-**File:** `pkg/ssh/ssh.go:385-415`
+**Implementation:** SSH connector
 
 ```go
 // SSHSigningMethodServer verifies SSH signatures during JWT parsing
@@ -431,67 +512,61 @@ func (m *SSHSigningMethodServer) Verify(signingString string, signature []byte, 
 ```
 
 **Key Points:**
-- JWT signature verification integrated into JWT parsing (jwt-ssh-agent pattern)
-- Cryptographic verification using SSH public key from JWT claims
-- Proves ownership of SSH private key without exposing it
-- Ensures JWT integrity and authenticity
+- Secure JWT verification using only SSH keys configured in Dex
+- Prevents arbitrary key injection attacks by rejecting embedded keys
+- Cryptographic verification proves ownership of configured SSH private key
+- Username-based lookup for O(1) performance, then key verification
+- Ensures JWT integrity and authenticity with pre-authorized keys only
 
-#### 4. Direct User Lookup with Key Authorization (O(1) Performance)
-**File:** `pkg/ssh/ssh.go:185-202`
+#### 4. Secure Key-Based Authentication Flow
+**Implementation:** SSH connector
 
 ```go
-// Extract key fingerprint for authorization check
-keyFingerprint, ok := claims["key_fingerprint"].(string)
-if !ok || keyFingerprint == "" {
-    return connector.Identity{}, errors.New("missing or invalid key_fingerprint claim")
-}
-
-// Look up user info by username (sub claim) and verify key is authorized
-userInfo, err := c.findUserByUsernameAndKey(sub, keyFingerprint)
-if err != nil {
-    return connector.Identity{}, fmt.Errorf("SSH authentication failed for user %s with key %s: %w", sub, keyFingerprint, err)
-}
-
-// findUserByUsernameAndKey provides O(1) lookup performance
-func (c *SSHConnector) findUserByUsernameAndKey(username, keyFingerprint string) (UserInfo, error) {
+// Security-first approach: only configured keys can authenticate
+func (c *SSHConnector) authenticateUser(username string, verifiedKey ssh.PublicKey) (*UserConfig, error) {
     // Direct O(1) lookup by username
-    if userConfig, exists := c.config.Users[username]; exists {
-        // Check if this key is authorized for this user
-        for _, authorizedKey := range userConfig.Keys {
-            if authorizedKey == keyFingerprint {
-                userInfo := userConfig.UserInfo
-                if userInfo.Username == "" {
-                    userInfo.Username = username
-                }
-                return userInfo, nil
-            }
-        }
-        return UserInfo{}, fmt.Errorf("key %s not authorized for user %s", keyFingerprint, username)
+    userConfig, exists := c.config.Users[username]
+    if !exists {
+        return nil, fmt.Errorf("user %s not found", username)
     }
 
-    // Fall back to legacy format (O(n) search)
-    if c.config.AuthorizedKeys != nil {
-        if userInfo, exists := c.config.AuthorizedKeys[keyFingerprint]; exists {
-            if userInfo.Username == username {
-                return userInfo, nil
+    // Generate fingerprint of the verified key
+    keyFingerprint := ssh.FingerprintSHA256(verifiedKey)
+
+    // Verify this key is authorized for this user
+    for _, authorizedKey := range userConfig.Keys {
+        if authorizedKey == keyFingerprint {
+            // Key is authorized - authentication successful
+            userInfo := userConfig.UserInfo
+            if userInfo.Username == "" {
+                userInfo.Username = username
             }
-            return UserInfo{}, fmt.Errorf("key %s belongs to user %s, not %s", keyFingerprint, userInfo.Username, username)
+            return &userConfig, nil
         }
     }
 
-    return UserInfo{}, fmt.Errorf("user %s not found or key %s not authorized", username, keyFingerprint)
+    return nil, fmt.Errorf("key %s not authorized for user %s", keyFingerprint, username)
+}
+
+// Helper to retrieve public key by fingerprint from configuration
+func (c *SSHConnector) getPublicKeyByFingerprint(fingerprint string) ssh.PublicKey {
+    // This would lookup the actual public key from a key store
+    // Implementation depends on how public keys are stored/configured
+    // Could be from filesystem, database, or embedded in config
+    return c.keyStore.GetPublicKey(fingerprint)
 }
 ```
 
 **Key Points:**
-- **NEW:** Direct O(1) user lookup using JWT `sub` claim (username)
-- Efficient key authorization verification (no need to search all users)  
-- Supports multiple SSH keys per user via new `Users` configuration format
-- Falls back to legacy `AuthorizedKeys` format for backward compatibility
-- Rejects authentication if user not found or key not authorized
+- **SECURE:** Only SSH keys explicitly configured in Dex can verify JWTs
+- **Direct O(1) user lookup** using JWT `sub` claim (username)
+- **Cryptographic verification first**, then authorization check
+- **Prevents key injection attacks** - no embedded keys accepted
+- **Multiple keys per user** supported via `Users` configuration format
+- **Comprehensive audit logging** of authentication attempts
 
 #### 5. Identity Construction
-**File:** `pkg/ssh/ssh.go:136-148`
+**Implementation:** SSH connector
 
 ```go
 // Build identity
@@ -514,7 +589,7 @@ return identity, nil
 ### Configuration Structure
 
 #### SSH Connector Config
-**File:** `pkg/ssh/ssh.go:17-33` and `35-42`
+**Implementation:** SSH connector
 
 ```go
 type Config struct {
@@ -546,7 +621,7 @@ type UserConfig struct {
 ```
 
 #### User Information
-**File:** `pkg/ssh/ssh.go:45-50`
+**Implementation:** SSH connector
 
 ```go
 type UserInfo struct {
@@ -667,7 +742,7 @@ The multiple token authentication system solves JWT validation failures that occ
 ### Implementation
 
 #### Server-Side (Dex SSH Connector)
-**File:** `pkg/ssh/ssh.go:350-420`
+**Implementation:** SSH connector
 
 1. **Generate Multiple Tokens**: The `generateAllTokenOptions()` function creates tokens using all available RSA signing keys
 2. **Token Response Structure**: Returns both single token (backward compatibility) and array of token options

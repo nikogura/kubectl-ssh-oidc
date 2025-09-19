@@ -1,0 +1,95 @@
+# Example Dex configuration with SSH connector using TokenIdentityConnector
+# This configuration uses the OAuth2 Token Exchange standard (RFC 8693)
+
+issuer: https://dex.example.com
+
+storage:
+  type: kubernetes
+  config:
+    inCluster: true
+
+web:
+  http: 0.0.0.0:5556
+
+telemetry:
+  http: 0.0.0.0:5558
+
+expiry:
+  idTokens: 1h
+  refreshTokens:
+    validIfNotUsedFor: 10m
+    absoluteLifetime: 1h
+
+logger:
+  level: info
+  format: json
+
+connectors:
+  - type: google
+    id: google
+    name: Google
+    config:
+      clientID: $GOOGLE_CLIENT_ID
+      clientSecret: $GOOGLE_CLIENT_SECRET
+      redirectURI: https://dex.example.com/callback
+      serviceAccountFilePath: /etc/dex/creds/googleAuth.json
+      hostedDomains:
+        - example.com
+      domainToAdminEmail:
+        example.com: admin@example.com
+
+  - type: ssh
+    id: ssh
+    name: SSH Key Authentication
+    config:
+      # SSH connector configuration
+      enable_direct_token: true      # Support legacy direct token mode (for backward compatibility)
+      enable_token_identity: true    # Enable OAuth2 Token Exchange (TokenIdentityConnector)
+
+      # Example user configuration
+      users:
+        alice:
+          keys:
+            - "SHA256:example-fingerprint-alice-ed25519-key-here"
+            - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleAlicePublicKeyDataHere alice@example.com"
+          groups:
+            - admin
+            - developers
+            - kubernetes-users
+          username: alice
+          email: alice@example.com
+          full_name: "Alice Smith"
+
+        bob:
+          keys:
+            - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleBobPublicKeyDataHere bob@example.com"
+          groups:
+            - developers
+            - kubernetes-users
+          username: bob
+          email: bob@example.com
+          full_name: "Bob Johnson"
+
+        # Add more users as needed...
+
+      # Security settings
+      allowed_issuers:
+      - "kubectl-ssh-oidc"
+
+      allowed_clients:
+      - "0a934e2005af4386eed73f16931056"  # kubelogin client (ONLY working client)
+
+      token_ttl: 300  # 5 minutes
+
+oauth2:
+  skipApprovalScreen: true
+
+staticClients:
+  - name: kubelogin
+    id: 0a934e2005af4386eed73f16931056
+    secret: 41192cdea4d706e945dc8765f6ed27
+    public: true
+    redirectURIs:
+      - http://localhost:8000
+
+# NOTE: This configuration supports both legacy and new OAuth2 Token Exchange authentication

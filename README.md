@@ -4,7 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/nikogura/kubectl-ssh-oidc)](https://github.com/nikogura/kubectl-ssh-oidc/releases)
 
-A kubectl plugin that provides **passwordless authentication** to Kubernetes clusters using SSH keys from ssh-agent or filesystem and Dex Identity Provider.
+A kubectl plugin that provides **passwordless authentication** to Kubernetes clusters using SSH keys and Dex Identity Provider with SSH connector support.
+
+> **Note**: This repository contains only the kubectl plugin. The server-side SSH connector for Dex is maintained in a separate fork at [github.com/nikogura/dex](https://github.com/nikogura/dex) and is intended for upstream contribution to Dex.
 
 ## 🚀 Overview
 
@@ -39,13 +41,15 @@ graph LR
 
 **Authentication Flow:**
 1. User runs `kubectl` command
-2. kubectl calls `kubectl-ssh-oidc` plugin  
+2. kubectl calls `kubectl-ssh-oidc` plugin
 3. Plugin discovers SSH keys from ssh-agent and/or filesystem (standard SSH locations)
-4. Plugin creates JWT with SSH key metadata and standard claims (sub, aud, jti, exp)
+4. Plugin creates JWT with standard claims only (sub, aud, iss, jti, exp, iat, nbf)
 5. Plugin signs JWT directly using SSH private key (follows jwt-ssh-agent pattern)
-6. Plugin exchanges signed JWT with Dex
-7. Dex validates SSH signature, expiration, and audience claims then returns OIDC token
+6. Plugin exchanges signed JWT with Dex using OAuth2 Token Exchange (RFC 8693)
+7. Dex validates JWT signature against administrator-configured SSH keys and returns OIDC token
 8. kubectl uses OIDC token to authenticate with Kubernetes API
+
+**Security Model**: JWT contains no SSH keys or fingerprints - it's just a packaging format. All SSH keys and user mappings are configured by administrators in Dex, preventing key injection attacks.
 
 ## 📦 Installation
 
@@ -196,6 +200,8 @@ openssl rand -base64 32
 
 ### 4. Configure Dex
 
+> **Important**: This kubectl plugin requires a Dex instance with SSH connector support. The SSH connector is not yet available in upstream Dex. You must use the Dex fork at [github.com/nikogura/dex](https://github.com/nikogura/dex) that includes the SSH connector implementation.
+
 Create or update your Dex configuration (use the fingerprints from step 2 and credentials from step 3):
 
 ```yaml
@@ -254,44 +260,109 @@ connectors:
     token_ttl: 3600  # Optional: Token lifetime in seconds (defaults to 3600 if not specified)
 ```
 
-### 5. Deploy Custom Dex with SSH Connector
+### 5. Build and Deploy Dex with SSH Connector
 
-The SSH connector is included in this repository in the `pkg/ssh` package and acts as a Dex connector. The integration has been tested and validated with Dex v2.39.1.
+**Important**: You must use the Dex fork at [github.com/nikogura/dex](https://github.com/nikogura/dex) which includes the SSH connector implementation.
 
-#### Option A: Docker Build (Recommended)
-
-Use the provided Docker setup to build a custom Dex image:
+#### Building from Source
 
 ```bash
-# Production builds (for deployment)
-cd docker/production
-make CONTAINER_REPO=your-registry.com/dex build push
-
-# Integration testing builds (for development)
-docker build -f docker/integration-testing/Dockerfile -t dex-test:latest .
-
-# Use with specific versions
-make DEX_VERSION=v2.39.1 KUBECTL_SSH_OIDC_VERSION=v0.1.0 build
-```
-
-See [`docker/README.md`](docker/README.md) for detailed Docker build instructions.
-
-#### Option B: Manual Build
-
-```bash
-# 1. Clone Dex repository
-git clone https://github.com/dexidp/dex
+# 1. Clone the Dex fork with SSH connector
+git clone https://github.com/nikogura/dex
 cd dex
 
-# 2. Copy the SSH connector from this repo
-cp -r /path/to/kubectl-ssh-oidc/pkg/ssh ./connector/ssh
-
-# 3. Add SSH connector import to cmd/dex/serve.go
-# Add: _ "github.com/dexidp/dex/connector/ssh"
-
-# 4. Build custom Dex
+# 2. Build the Dex binary
 make build
+
+# 3. The binary will be in bin/dex
+./bin/dex version
 ```
+
+#### Building Docker Image
+
+```bash
+# Build Docker image with SSH connector
+docker build -t dex-ssh:latest .
+
+# Tag for your registry (optional)
+docker tag dex-ssh:latest your-registry.com/dex-ssh:v2.44.0
+
+# Push to registry (optional)
+docker push your-registry.com/dex-ssh:v2.44.0
+```
+
+#### Deployment Options
+
+**Option A: Docker**
+```bash
+# Run with your config file
+docker run -d \
+  -p 5556:5556 \
+  -v /path/to/your/dex-config.yaml:/etc/dex/config.yaml \
+  dex-ssh:latest \
+  serve /etc/dex/config.yaml
+```
+
+**Option B: Kubernetes**
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dex
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dex
+  template:
+    metadata:
+      labels:
+        app: dex
+    spec:
+      containers:
+      - name: dex
+        image: your-registry.com/dex-ssh:v2.44.0
+        ports:
+        - containerPort: 5556
+        command: ["dex", "serve", "/etc/dex/cfg/config.yaml"]
+        volumeMounts:
+        - name: config
+          mountPath: /etc/dex/cfg
+      volumes:
+      - name: config
+        configMap:
+          name: dex-config
+```
+
+**Option C: systemd Service**
+```bash
+# Copy binary to system location
+sudo cp bin/dex /usr/local/bin/
+
+# Create systemd service
+sudo tee /etc/systemd/system/dex.service << EOF
+[Unit]
+Description=Dex OIDC Identity Provider
+After=network.target
+
+[Service]
+Type=simple
+User=dex
+Group=dex
+ExecStart=/usr/local/bin/dex serve /etc/dex/config.yaml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start service
+sudo systemctl enable dex
+sudo systemctl start dex
+```
+
+The SSH connector supports both legacy direct token authentication and OAuth2 Token Exchange (RFC 8693).
 
 ### 6. Configure Kubernetes Cluster
 
@@ -478,24 +549,18 @@ kubectl-ssh-oidc/
 ├── pkg/
 │   ├── kubectl/              # kubectl plugin implementation
 │   │   └── mocks/            # Mock objects for testing
-│   └── ssh/                  # Dex SSH connector implementation
-│       └── mocks/            # SSH connector mocks
-├── docker/                   # Docker builds for custom Dex with SSH connector
-│   ├── production/           # Production-ready builds from GitHub releases
-│   │   ├── Dockerfile        # Self-contained multi-stage build
-│   │   ├── Makefile          # Multi-registry build automation
-│   │   └── README.md         # Production build documentation
-│   ├── integration-testing/  # Development builds using local source
-│   │   ├── Dockerfile        # Local source integration build
-│   │   └── README.md         # Integration testing documentation
-│   └── README.md             # Docker build overview and guidance
-├── testdata/                 # Test helper functions
-├── integration_test.go       # End-to-end integration tests
+├── test/                     # Test tools and example configuration
+│   ├── dex-config.yaml       # Example Dex configuration with SSH connector
+│   └── test.go               # Standalone test tool for OAuth2 Token Exchange
+│   └── helpers.go            # Test helper functions and mock data
+├── test_integration.go       # End-to-end integration tests
 ├── Makefile                  # Build automation
 ├── README.md                 # This file
 ├── Usage.md                  # Usage documentation
 └── go.mod                    # Go module definition
 ```
+
+**Note**: The Dex SSH connector implementation is maintained in the separate fork at [github.com/nikogura/dex](https://github.com/nikogura/dex).
 
 ## 🔧 Troubleshooting
 
@@ -531,7 +596,74 @@ kubectl-ssh-oidc https://dex.example.com kubectl-ssh-oidc your-username
 echo "Username: ${KUBECTL_SSH_USER:-$(whoami)}"
 ```
 
-## 🔒 Security Considerations
+### Test Client
+
+A standalone test client is provided to demonstrate and test the OAuth2 Token Exchange flow:
+
+```bash
+# Build the test tool
+cd test
+go build -o test test.go
+
+# Test authentication flow (requires SSH agent with loaded key)
+./test https://dex.example.com username
+
+# Example output:
+# Testing kubectl-ssh-oidc authentication
+# ===================================
+# Dex URL: https://dex.example.com
+# Username: username
+# SSH Agent: $SSH_AUTH_SOCK = /tmp/ssh-agent.sock
+#
+# 1. Creating SSH-signed JWT...
+#    ✅ SSH JWT created
+#
+# 2. Exchanging SSH JWT via OAuth2 Token Exchange...
+#    ✅ Token exchange successful
+#
+# 3. Results:
+#    Access Token: eyJhbGciOiJSUzI1NiIsImtpZCI6...
+#    ID Token: eyJhbGciOiJSUzI1NiIsImtpZCI6...
+#
+# 4. Validating ID token structure:
+#      - Algorithm: RS256 ✅
+#      - Subject: username ✅
+#      - Issuer: https://dex.example.com ✅
+#      - Audience: kubernetes ✅
+#      - Groups: [admin, developers] ✅
+#      - Email: username@example.com ✅
+#    ✅ ID token is valid for Kubernetes
+#
+# 🎉 kubectl-ssh-oidc authentication test successful!
+```
+
+**Requirements:**
+- SSH agent running with authorized key loaded
+- Dex instance running with SSH connector configured
+- User configured in Dex SSH connector configuration
+
+## 🔒 Security Model and Considerations
+
+### Security Architecture
+
+This plugin implements a secure JWT-based authentication model designed to prevent common security vulnerabilities:
+
+**JWT is Just a Packaging Format**: JWTs contain no trusted data until cryptographic verification succeeds against keys configured by Dex administrators.
+
+**Administrative Control Model**: The Dex configuration provides complete access control:
+- **WHO can connect**: Only users explicitly configured in Dex can authenticate
+- **HOW they prove identity**: Each user's configured SSH keys define which private keys can cryptographically prove the user's identity
+- **WHAT they can access**: User configuration determines scopes (email, groups, permissions)
+
+**Identity Claim and Proof**: Users prove their identity through a two-step process:
+1. **Identity Claim**: User sets the `sub` field in the JWT to claim their identity
+2. **Cryptographic Proof**: User signs the JWT with their SSH private key to prove they control that identity
+
+**Security Separation**: Authentication (cryptographic proof via SSH key signature) is completely separated from authorization (administrative policy configured in Dex), preventing clients from influencing their own permissions.
+
+**No Key Injection**: JWTs cannot contain verification keys that clients control - all trusted SSH keys and user mappings are configured by Dex administrators, preventing privilege escalation attacks.
+
+### Security Best Practices
 
 - **SSH Key Security**: Use strong key types (Ed25519, RSA 4096+, ECDSA P-384)
 - **Key Rotation**: Regularly rotate SSH keys and update Dex configuration
@@ -560,12 +692,13 @@ echo "Username: ${KUBECTL_SSH_USER:-$(whoami)}"
 ## 📊 Project Status
 
 This project includes:
-- ✅ **kubectl plugin**: Complete implementation in `pkg/kubectl/`
-- ✅ **Dex SSH connector**: Complete implementation in `pkg/ssh/`
+- ✅ **kubectl plugin**: Complete OAuth2 Token Exchange implementation in `pkg/kubectl/`
 - ✅ **Comprehensive tests**: Unit tests and integration tests
 - ✅ **Cross-platform builds**: Automated build pipeline
 - ✅ **Documentation**: Usage examples and configuration guides
 - ⚠️ **Binary releases**: Set up GitHub Actions for automated releases
+
+**Dex SSH connector**: Available in the separate fork at [github.com/nikogura/dex](https://github.com/nikogura/dex)
 
 ## 📋 Requirements
 

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package testdata
+package helpers
 
 import (
 	"crypto/rand"
@@ -139,10 +139,10 @@ func TestPublicKey2() (ssh.PublicKey, error) {
 
 // TestSSHKey represents a test SSH key with its data.
 type TestSSHKey struct {
-	PublicKey       ssh.PublicKey
-	Signer          ssh.Signer
-	PublicKeyBytes  []byte
-	Fingerprint     string
+	PublicKey      ssh.PublicKey
+	Signer         ssh.Signer
+	PublicKeyBytes []byte
+	Fingerprint    string
 }
 
 // GenerateSSHKeysForTest generates multiple test SSH keys for testing both formats.
@@ -150,7 +150,7 @@ func GenerateSSHKeysForTest() ([]TestSSHKey, error) {
 	var keys []TestSSHKey
 
 	// Generate 3 test keys
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		publicKey, signer, _, err := GenerateTestSSHKey()
 		if err != nil {
 			return nil, err
