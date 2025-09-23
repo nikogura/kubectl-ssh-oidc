@@ -43,7 +43,10 @@ graph LR
 1. User runs `kubectl` command
 2. kubectl calls `kubectl-ssh-oidc` plugin
 3. Plugin discovers SSH keys from ssh-agent and/or filesystem (standard SSH locations)
-4. Plugin creates JWT with standard claims only (sub, aud, iss, jti, exp, iat, nbf)
+4. Plugin creates JWT with dual audience model:
+   - `aud`: Dex instance ID (ensures JWT is for correct Dex instance)
+   - `target_audience`: Desired audience for final OIDC tokens (optional)
+   - Standard claims: `sub`, `iss`, `jti`, `exp`, `iat`, `nbf`
 5. Plugin signs JWT directly using SSH private key (follows jwt-ssh-agent pattern)
 6. Plugin exchanges signed JWT with Dex using OAuth2 Token Exchange (RFC 8693)
 7. Dex validates JWT signature against administrator-configured SSH keys and returns OIDC token
@@ -213,9 +216,15 @@ connectors:
     allowed_issuers:
     - "kubectl-ssh-oidc"
     
-    # Security: List of allowed OAuth2 client IDs for multi-client environments
+    # NEW: Dual audience model for secure instance validation
+    dex_instance_id: "https://dex.example.com"        # Ensures JWTs are for this Dex instance
+    allowed_target_audiences:                          # Controls final token audiences
+    - "your-generated-client-id"                       # Must match staticClients configuration
+    - "kubectl"                                        # Standard kubectl client ID
+
+    # DEPRECATED: Legacy single-audience support (for backward compatibility)
     allowed_clients:
-    - "your-generated-client-id"       # Must match staticClients configuration
+    - "your-generated-client-id"                       # Still supported during migration
     
     default_groups:
     - "authenticated"
@@ -361,6 +370,10 @@ users:
         value: "your-client-id"         # Generated client ID from Dex config
       - name: CLIENT_SECRET
         value: "your-client-secret"     # Generated client secret from Dex config
+      - name: DEX_INSTANCE_ID
+        value: "https://dex.example.com"  # NEW: Dex instance ID for security
+      - name: TARGET_AUDIENCE
+        value: "your-client-id"         # NEW: Target audience for tokens
       - name: KUBECTL_SSH_USER
         value: "your-username"
 
@@ -410,8 +423,10 @@ kubectl logs deployment/my-app
 # Authentication settings
 export DEX_URL="https://dex.example.com"
 export CLIENT_ID="your-generated-client-id"    # From Dex staticClients configuration
-export CLIENT_SECRET="your-client-secret"      # From Dex staticClients configuration  
-export AUDIENCE="kubernetes"
+export CLIENT_SECRET="your-client-secret"      # From Dex staticClients configuration
+export DEX_INSTANCE_ID="https://dex.example.com"  # NEW: Dex instance ID for security
+export TARGET_AUDIENCE="your-generated-client-id" # NEW: Target audience for final tokens
+export AUDIENCE="kubernetes"                   # DEPRECATED: Legacy audience support
 export CACHE_TOKENS="true"
 export KUBECTL_SSH_USER="your-username"        # Username for authentication
 
@@ -604,6 +619,83 @@ go build -o test test.go
 - SSH agent running with authorized key loaded
 - Dex instance running with SSH connector configured
 - User configured in Dex SSH connector configuration
+
+## 🔄 Migration from Legacy Audience Model
+
+The kubectl-ssh-oidc plugin now supports a new **dual audience model** for enhanced security while maintaining backward compatibility with existing deployments.
+
+### Migration Benefits
+
+- **Enhanced Security**: Prevents JWT replay attacks across different Dex instances
+- **Flexible Token Audiences**: Control what audiences can be requested in final OIDC tokens
+- **Zero Downtime**: Gradual migration path with full backward compatibility
+
+### Migration Steps
+
+#### Phase 1: Update Dex Configuration
+```yaml
+connectors:
+- type: ssh
+  config:
+    # NEW: Add dual audience fields
+    dex_instance_id: "https://dex.example.com"    # Your Dex issuer URL
+    allowed_target_audiences:                      # Migrate from allowed_clients
+      - "kubectl"
+      - "your-client-id"
+
+    # KEEP: Legacy field for backward compatibility during migration
+    allowed_clients:
+      - "your-client-id"  # Existing clients continue working
+```
+
+#### Phase 2: Update Client Configuration
+```yaml
+# NEW dual-audience kubeconfig (recommended)
+users:
+- name: ssh-oidc-user
+  user:
+    exec:
+      apiVersion: client.authentication.k8s.io/v1
+      command: kubectl-ssh-oidc
+      env:
+      - name: DEX_INSTANCE_ID
+        value: "https://dex.example.com"  # NEW: Ensures JWT is for this Dex instance
+      - name: TARGET_AUDIENCE
+        value: "kubectl"                  # NEW: Desired audience for final tokens
+      - name: DEX_URL
+        value: "https://dex.example.com"
+      - name: CLIENT_ID
+        value: "your-client-id"
+      # ... other existing config
+```
+
+#### Phase 3: Verify Migration
+Monitor your Dex logs to see migration progress:
+```
+SSH_AUDIT: type=token_type username=alice status=info details="processing new_dual_audience token"
+SSH_AUDIT: type=token_type username=bob status=info details="processing legacy_single_audience token"
+```
+
+#### Phase 4: Clean Up (Optional)
+Once all clients show "new_dual_audience" in logs:
+```yaml
+# Remove legacy fields from Dex configuration
+connectors:
+- type: ssh
+  config:
+    dex_instance_id: "https://dex.example.com"
+    allowed_target_audiences:
+      - "kubectl"
+      - "your-client-id"
+    # allowed_clients can now be removed
+```
+
+### Rollback Support
+
+If issues occur during migration:
+1. Keep `allowed_target_audiences` configured
+2. Legacy clients continue working unchanged
+3. No service interruption during rollback
 
 ## 🔒 Security Model and Considerations
 

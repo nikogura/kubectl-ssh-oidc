@@ -123,16 +123,17 @@ func createSSHJWTFromAgent(username string) (string, error) {
 
 	// Note: public key and fingerprint no longer embedded in JWT for security
 
-	// Create JWT claims
+	// Create JWT claims with dual audience model
 	now := time.Now()
 	claims := jwt.MapClaims{
-		"iss": "kubectl-ssh-oidc",
-		"sub": username,
-		"aud": "kubernetes",
-		"jti": fmt.Sprintf("%d-%s", now.UnixNano(), username),
-		"exp": now.Add(5 * time.Minute).Unix(),
-		"iat": now.Unix(),
-		"nbf": now.Unix(),
+		"iss":             "kubectl-ssh-oidc",
+		"sub":             username,
+		"aud":             "http://127.0.0.1:5556/dex", // Dex instance ID
+		"target_audience": "example-app",               // Target audience for tokens
+		"jti":             fmt.Sprintf("%d-%s", now.UnixNano(), username),
+		"exp":             now.Add(5 * time.Minute).Unix(),
+		"iat":             now.Unix(),
+		"nbf":             now.Unix(),
 	}
 
 	// Create JWT with SSH agent signing

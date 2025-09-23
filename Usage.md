@@ -210,8 +210,12 @@ users:
         value: "https://dex.example.com"
       - name: CLIENT_ID
         value: "kubectl-ssh-oidc"
+      - name: DEX_INSTANCE_ID
+        value: "https://dex.example.com"  # NEW: Dex instance ID for security
+      - name: TARGET_AUDIENCE
+        value: "kubectl-ssh-oidc"         # NEW: Target audience for tokens
       - name: AUDIENCE
-        value: "kubernetes"
+        value: "kubernetes"               # DEPRECATED: Legacy audience support
       - name: CACHE_TOKENS
         value: "true"
       - name: KUBECTL_SSH_USER
@@ -265,9 +269,11 @@ Configure the plugin using environment variables:
 # Authentication settings
 export DEX_URL="https://dex.example.com"
 export CLIENT_ID="kubectl-ssh-oidc"
-export AUDIENCE="kubernetes"
+export DEX_INSTANCE_ID="https://dex.example.com"  # NEW: Dex instance ID for security
+export TARGET_AUDIENCE="kubectl-ssh-oidc"         # NEW: Target audience for final tokens
+export AUDIENCE="kubernetes"                      # DEPRECATED: Legacy audience support
 export CACHE_TOKENS="true"
-export KUBECTL_SSH_USER="your-username"  # Username for authentication
+export KUBECTL_SSH_USER="your-username"           # Username for authentication
 
 # SSH behavior control
 export SSH_USE_AGENT="true"              # Use SSH agent (default: true)

@@ -54,10 +54,17 @@ var (
 
 // Config represents the plugin configuration.
 type Config struct {
-	DexURL         string   `json:"dex_url"`
-	ClientID       string   `json:"client_id"`
-	ClientSecret   string   `json:"client_secret"`
-	Audience       string   `json:"audience"`
+	DexURL       string `json:"dex_url"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+
+	// NEW: Dual audience model support
+	DexInstanceID  string `json:"dex_instance_id"` // Required aud claim (Dex instance identifier)
+	TargetAudience string `json:"target_audience"` // Optional target_audience claim for final tokens
+
+	// DEPRECATED: Use DexInstanceID and TargetAudience instead
+	Audience string `json:"audience,omitempty"` // Backward compatibility only
+
 	CacheTokens    bool     `json:"cache_tokens"`
 	Username       string   `json:"username,omitempty"`
 	SSHKeyPaths    []string `json:"ssh_key_paths,omitempty"`   // Custom SSH key paths
@@ -477,16 +484,33 @@ func tryUnifiedKeyAuthentication(sshKey *SSHKey, config *Config, sshClient *Unif
 		return "", fmt.Errorf("failed to generate JWT ID: %w", err)
 	}
 
-	// Create JWT claims - minimal, standards-compliant approach like jwt-ssh-agent
+	// Create JWT claims with dual audience model
 	now := time.Now()
+
+	// Determine audience based on new dual model or legacy config
+	var audience string
+	if config.DexInstanceID != "" {
+		audience = config.DexInstanceID
+	} else if config.Audience != "" {
+		// Backward compatibility: use legacy audience field
+		audience = config.Audience
+	} else {
+		return "", errors.New("either dex_instance_id or audience must be configured")
+	}
+
 	claims := jwt.MapClaims{
 		"iss": "kubectl-ssh-oidc",              // Issuer
 		"sub": config.Username,                 // Subject (username)
-		"aud": config.Audience,                 // Audience
+		"aud": audience,                        // Dex instance ID (or legacy audience)
 		"jti": jwtID,                           // JWT ID
 		"exp": now.Add(5 * time.Minute).Unix(), // Expires in 5 minutes
 		"iat": now.Unix(),                      // Issued at
 		"nbf": now.Unix(),                      // Not before
+	}
+
+	// Add target_audience if specified (new dual audience model)
+	if config.TargetAudience != "" {
+		claims["target_audience"] = config.TargetAudience
 	}
 
 	// Create JWT with custom SSH signing method for unified keys
@@ -796,10 +820,17 @@ func validateJWT(sshJWT string) error {
 // LoadConfig loads configuration from environment or default values.
 func LoadConfig() *Config {
 	config := &Config{
-		DexURL:         getEnvOrDefault("DEX_URL", "https://dex.example.com"),
-		ClientID:       getEnvOrDefault("CLIENT_ID", "kubectl-ssh-oidc"),
-		ClientSecret:   getEnvOrDefault("CLIENT_SECRET", ""),
-		Audience:       getEnvOrDefault("AUDIENCE", "kubernetes"),
+		DexURL:       getEnvOrDefault("DEX_URL", "https://dex.example.com"),
+		ClientID:     getEnvOrDefault("CLIENT_ID", "kubectl-ssh-oidc"),
+		ClientSecret: getEnvOrDefault("CLIENT_SECRET", ""),
+
+		// NEW: Dual audience model support
+		DexInstanceID:  getEnvOrDefault("DEX_INSTANCE_ID", ""),
+		TargetAudience: getEnvOrDefault("TARGET_AUDIENCE", ""),
+
+		// DEPRECATED: Backward compatibility only
+		Audience: getEnvOrDefault("AUDIENCE", "kubernetes"),
+
 		CacheTokens:    getEnvOrDefault("CACHE_TOKENS", trueString) == trueString,
 		Username:       getEnvOrDefault("KUBECTL_SSH_USER", ""),
 		UseAgent:       getEnvOrDefault("SSH_USE_AGENT", trueString) == trueString,

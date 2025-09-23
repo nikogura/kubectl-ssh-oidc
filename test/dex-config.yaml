@@ -1,5 +1,6 @@
-# Example Dex configuration with SSH connector using TokenIdentityConnector
+# Example Dex configuration with SSH connector using dual audience model
 # This configuration uses the OAuth2 Token Exchange standard (RFC 8693)
+# Updated for dual audience model with backward compatibility
 
 issuer: https://dex.example.com
 
@@ -75,10 +76,19 @@ connectors:
       allowed_issuers:
       - "kubectl-ssh-oidc"
 
+      # NEW: Dual audience model for enhanced security
+      dex_instance_id: "https://dex.example.com"        # Ensures JWTs are for this Dex instance
+      allowed_target_audiences:                          # Controls final token audiences
+      - "0a934e2005af4386eed73f16931056"                 # kubelogin client ID
+      - "kubectl"                                        # Standard kubectl client ID
+      - "example-app"                                    # Custom application client ID
+
+      # DEPRECATED: Legacy single-audience support (maintained for backward compatibility)
       allowed_clients:
-      - "0a934e2005af4386eed73f16931056"  # kubelogin client (ONLY working client)
+      - "0a934e2005af4386eed73f16931056"                 # Still supported during migration
 
       token_ttl: 300  # 5 minutes
+      challenge_ttl: 300  # 5 minutes for challenge/response auth
 
 oauth2:
   skipApprovalScreen: true
@@ -91,4 +101,19 @@ staticClients:
     redirectURIs:
       - http://localhost:8000
 
-# NOTE: This configuration supports both legacy and new OAuth2 Token Exchange authentication
+# NOTE: This configuration supports both legacy single-audience and new dual-audience authentication
+# Migration path: Update clients to use DEX_INSTANCE_ID and TARGET_AUDIENCE environment variables
+#
+# Dual Audience Model Benefits:
+# - dex_instance_id: Prevents JWT replay attacks across different Dex instances
+# - allowed_target_audiences: Controls which audiences can be requested in final tokens
+# - Backward compatibility: Legacy clients using 'audience' claim continue to work
+#
+# Client Configuration Examples:
+#
+# NEW dual-audience client (recommended):
+# export DEX_INSTANCE_ID="https://dex.example.com"
+# export TARGET_AUDIENCE="0a934e2005af4386eed73f16931056"
+#
+# LEGACY single-audience client (still supported):
+# export AUDIENCE="0a934e2005af4386eed73f16931056"

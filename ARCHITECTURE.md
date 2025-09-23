@@ -224,10 +224,11 @@ func CreateSSHSignedJWT(config *Config) (string, error) {
 **File:** `pkg/kubectl/kubectl.go:460-510`
 
 ```go
-// JWT with standard claims following jwt-ssh-agent pattern
+// JWT with dual audience model for secure Dex instance validation
 claims := jwt.MapClaims{
     "sub": config.Username,                // Username for user lookup (O(1) performance)
-    "aud": config.ClientID,               // Audience claim (FIXED: use client ID for Kubernetes API server compatibility)
+    "aud": config.DexInstanceID,          // Dex instance identifier (SECURITY: prevents cross-instance attacks)
+    "target_audience": config.TargetAudience, // Optional: desired audience for final OIDC tokens
     "iss": "kubectl-ssh-oidc",           // Issuer
     "jti": generateJTI(),                 // JWT ID for uniqueness
     "exp": time.Now().Add(5*time.Minute).Unix(), // Short expiration
@@ -240,7 +241,7 @@ token := jwt.NewWithClaims(&SSHSigningMethod{}, claims)
 ```
 
 **Key Points:**
-- Uses only standard JWT claims: `sub`, `aud`, `jti`, `exp`, `iat`, `nbf`
+- Uses dual audience model: `aud` for Dex instance validation, `target_audience` for token control
 - `sub` claim contains username for direct O(1) user lookup
 - No embedded keys for security - verification uses administrator-configured keys only
 - Short 5-minute expiration for security
@@ -338,13 +339,20 @@ type SSHKey struct {
 
 ```go
 type Config struct {
-    DexURL       string   `json:"dex_url"`
-    ClientID     string   `json:"client_id"`
-    Audience     string   `json:"audience"`
-    Username     string   `json:"username"`        // For JWT sub claim
-    UseAgent     bool     `json:"use_agent"`       // Default: true
-    SSHKeyPaths  []string `json:"ssh_key_paths,omitempty"` // Custom key locations
-    IdentitiesOnly bool   `json:"identities_only,omitempty"` // Use only specified keys
+    DexURL           string   `json:"dex_url"`
+    ClientID         string   `json:"client_id"`
+
+    // NEW: Dual audience model support
+    DexInstanceID    string `json:"dex_instance_id"`    // Required aud claim (Dex instance identifier)
+    TargetAudience   string `json:"target_audience"`    // Optional target_audience claim for final tokens
+
+    // DEPRECATED: Use DexInstanceID and TargetAudience instead
+    Audience         string `json:"audience,omitempty"` // Backward compatibility only
+
+    Username         string   `json:"username"`        // For JWT sub claim
+    UseAgent         bool     `json:"use_agent"`       // Default: true
+    SSHKeyPaths      []string `json:"ssh_key_paths,omitempty"` // Custom key locations
+    IdentitiesOnly   bool     `json:"identities_only,omitempty"` // Use only specified keys
 }
 ```
 
