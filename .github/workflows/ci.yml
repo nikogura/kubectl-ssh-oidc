@@ -81,7 +81,7 @@ jobs:
     - name: Lint Checks
       run: make lint
 
-    # Integration tests using the actual test_integration.go file
+    # Integration tests using the actual test_integration_test.go file
     # These tests require environment variables to be set to run, otherwise they skip
     - name: Run integration tests (will skip without environment)
       run: |
