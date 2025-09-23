@@ -18,6 +18,7 @@ package kubectl
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -43,7 +44,7 @@ func TestLoadConfig(t *testing.T) {
 				TargetAudience: "",
 				Audience:       "kubernetes",
 				CacheTokens:    true,
-				Username:       "vayde", // system username
+				Username:       getSystemUsername(), // system username
 				UseAgent:       true,
 				IdentitiesOnly: false,
 			},
@@ -88,7 +89,7 @@ func TestLoadConfig(t *testing.T) {
 				TargetAudience: "",
 				Audience:       "kubernetes",
 				CacheTokens:    true,
-				Username:       "vayde", // system username
+				Username:       getSystemUsername(), // system username
 				UseAgent:       true,
 				IdentitiesOnly: false,
 			},
@@ -174,7 +175,13 @@ func TestSSHAgentClient(t *testing.T) {
 		client, err := NewSSHAgentClient()
 		if err != nil {
 			// This is expected if no SSH agent is running
-			assert.Contains(t, err.Error(), "SSH_AUTH_SOCK")
+			// Different error messages depending on environment
+			errMsg := err.Error()
+			assert.True(t,
+				strings.Contains(errMsg, "SSH_AUTH_SOCK") ||
+					strings.Contains(errMsg, "missing address") ||
+					strings.Contains(errMsg, "dial unix"),
+				"Expected SSH agent error, got: %s", errMsg)
 		} else {
 			assert.NotNil(t, client)
 		}
