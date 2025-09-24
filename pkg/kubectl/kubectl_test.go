@@ -37,12 +37,12 @@ func TestLoadConfig(t *testing.T) {
 			envVars: map[string]string{},
 			args:    []string{"kubectl-ssh-oidc"},
 			expected: &Config{
-				DexURL:         "https://dex.example.com",
-				ClientID:       "kubectl-ssh-oidc",
+				DexURL:         "",
+				ClientID:       "",
 				ClientSecret:   "",
 				DexInstanceID:  "",
 				TargetAudience: "",
-				Audience:       "kubernetes",
+				Audience:       "",
 				CacheTokens:    true,
 				Username:       getSystemUsername(), // system username
 				UseAgent:       true,
@@ -87,7 +87,7 @@ func TestLoadConfig(t *testing.T) {
 				ClientSecret:   "",
 				DexInstanceID:  "",
 				TargetAudience: "",
-				Audience:       "kubernetes",
+				Audience:       "",
 				CacheTokens:    true,
 				Username:       getSystemUsername(), // system username
 				UseAgent:       true,
@@ -120,6 +120,70 @@ func TestLoadConfig(t *testing.T) {
 
 			config := LoadConfig()
 			assert.Equal(t, tt.expected, config)
+		})
+	}
+}
+
+func TestValidateConfig(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      *Config
+		expectError bool
+		errorString string
+	}{
+		{
+			name: "valid config with dual audience",
+			config: &Config{
+				DexURL:        "https://dex.example.com",
+				ClientID:      "test-client",
+				ClientSecret:  "secret",
+				DexInstanceID: "https://dex.example.com",
+				Username:      "testuser",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid config with legacy audience",
+			config: &Config{
+				DexURL:       "https://dex.example.com",
+				ClientID:     "test-client",
+				ClientSecret: "secret",
+				Audience:     "kubernetes",
+				Username:     "testuser",
+			},
+			expectError: false,
+		},
+		{
+			name: "missing all required fields",
+			config: &Config{
+				CacheTokens: true,
+				UseAgent:    true,
+			},
+			expectError: true,
+			errorString: "Missing required configuration:",
+		},
+		{
+			name: "missing audience fields",
+			config: &Config{
+				DexURL:       "https://dex.example.com",
+				ClientID:     "test-client",
+				ClientSecret: "secret",
+				Username:     "testuser",
+			},
+			expectError: true,
+			errorString: "DEX_INSTANCE_ID or AUDIENCE",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateConfig(tt.config)
+			if tt.expectError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorString)
+			} else {
+				require.NoError(t, err)
+			}
 		})
 	}
 }

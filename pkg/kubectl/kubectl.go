@@ -58,11 +58,11 @@ type Config struct {
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret"`
 
-	// NEW: Dual audience model support
+	// Dual audience model support
 	DexInstanceID  string `json:"dex_instance_id"` // Required aud claim (Dex instance identifier)
 	TargetAudience string `json:"target_audience"` // Optional target_audience claim for final tokens
 
-	// DEPRECATED: Use DexInstanceID and TargetAudience instead
+	// Legacy single audience support
 	Audience string `json:"audience,omitempty"` // Backward compatibility only
 
 	CacheTokens    bool     `json:"cache_tokens"`
@@ -820,19 +820,19 @@ func validateJWT(sshJWT string) error {
 // LoadConfig loads configuration from environment or default values.
 func LoadConfig() *Config {
 	config := &Config{
-		DexURL:       getEnvOrDefault("DEX_URL", "https://dex.example.com"),
-		ClientID:     getEnvOrDefault("CLIENT_ID", "kubectl-ssh-oidc"),
-		ClientSecret: getEnvOrDefault("CLIENT_SECRET", ""),
+		DexURL:       os.Getenv("DEX_URL"),
+		ClientID:     os.Getenv("CLIENT_ID"),
+		ClientSecret: os.Getenv("CLIENT_SECRET"),
 
-		// NEW: Dual audience model support
-		DexInstanceID:  getEnvOrDefault("DEX_INSTANCE_ID", ""),
-		TargetAudience: getEnvOrDefault("TARGET_AUDIENCE", ""),
+		// Dual audience model support
+		DexInstanceID:  os.Getenv("DEX_INSTANCE_ID"),
+		TargetAudience: os.Getenv("TARGET_AUDIENCE"),
 
-		// DEPRECATED: Backward compatibility only
-		Audience: getEnvOrDefault("AUDIENCE", "kubernetes"),
+		// Legacy single audience support
+		Audience: os.Getenv("AUDIENCE"),
 
 		CacheTokens:    getEnvOrDefault("CACHE_TOKENS", trueString) == trueString,
-		Username:       getEnvOrDefault("KUBECTL_SSH_USER", ""),
+		Username:       os.Getenv("KUBECTL_SSH_USER"),
 		UseAgent:       getEnvOrDefault("SSH_USE_AGENT", trueString) == trueString,
 		IdentitiesOnly: getEnvOrDefault("SSH_IDENTITIES_ONLY", "false") == trueString,
 	}
@@ -862,12 +862,77 @@ func LoadConfig() *Config {
 		config.Username = positionalArgs[2]
 	}
 
-	// Username is required for proper JWT claims
+	// Username fallback to system username if not provided
 	if config.Username == "" {
 		config.Username = getSystemUsername()
 	}
 
 	return config
+}
+
+// ValidateConfig validates that all required configuration is present and returns a detailed error if not.
+func ValidateConfig(config *Config) error {
+	var missingFields []string
+	var suggestions []string
+
+	// Required fields
+	if config.DexURL == "" {
+		missingFields = append(missingFields, "DEX_URL")
+		suggestions = append(suggestions, "export DEX_URL=\"https://your-dex-instance.com\"")
+	}
+
+	if config.ClientID == "" {
+		missingFields = append(missingFields, "CLIENT_ID")
+		suggestions = append(suggestions, "export CLIENT_ID=\"your-client-id\"")
+	}
+
+	if config.ClientSecret == "" {
+		missingFields = append(missingFields, "CLIENT_SECRET")
+		suggestions = append(suggestions, "export CLIENT_SECRET=\"your-client-secret\"")
+	}
+
+	// Audience validation: must have either new dual model or legacy audience
+	hasDexInstanceID := config.DexInstanceID != ""
+	hasLegacyAudience := config.Audience != ""
+
+	if !hasDexInstanceID && !hasLegacyAudience {
+		missingFields = append(missingFields, "DEX_INSTANCE_ID or AUDIENCE")
+		suggestions = append(suggestions, "# Dual audience model (recommended):")
+		suggestions = append(suggestions, "export DEX_INSTANCE_ID=\"https://your-dex-instance.com\"")
+		suggestions = append(suggestions, "export TARGET_AUDIENCE=\"your-client-id\"")
+		suggestions = append(suggestions, "# OR single audience model:")
+		suggestions = append(suggestions, "export AUDIENCE=\"kubernetes\"")
+	}
+
+	if config.Username == "" {
+		missingFields = append(missingFields, "KUBECTL_SSH_USER")
+		suggestions = append(suggestions, "export KUBECTL_SSH_USER=\"your-username\"")
+	}
+
+	if len(missingFields) > 0 {
+		var errorMsg strings.Builder
+		errorMsg.WriteString("Missing required configuration:\n\n")
+
+		for _, field := range missingFields {
+			errorMsg.WriteString(fmt.Sprintf("  ❌ %s\n", field))
+		}
+
+		errorMsg.WriteString("\nRequired environment variables:\n")
+		for _, suggestion := range suggestions {
+			if strings.HasPrefix(suggestion, "#") {
+				errorMsg.WriteString(fmt.Sprintf("\n%s\n", suggestion))
+			} else {
+				errorMsg.WriteString(fmt.Sprintf("  %s\n", suggestion))
+			}
+		}
+
+		errorMsg.WriteString("\nFor kubectl exec plugin usage, set these in your kubeconfig under user.exec.env\n")
+		errorMsg.WriteString("See README.md for complete configuration examples.")
+
+		return errors.New(errorMsg.String())
+	}
+
+	return nil
 }
 
 // getEnvOrDefault returns environment variable value or default.

@@ -44,6 +44,13 @@ func main() {
 	// Load configuration
 	config := kubectl.LoadConfig()
 
+	// Validate configuration and exit with clear error if anything is missing
+	err := kubectl.ValidateConfig(config)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+
 	// Create SSH-signed JWT and authenticate with Dex (tests each key until one is authorized)
 	sshJWT, err := kubectl.CreateSSHSignedJWT(config)
 	if err != nil {
