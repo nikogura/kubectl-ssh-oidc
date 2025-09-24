@@ -28,12 +28,22 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Semver
-      uses: paulhatch/semantic-version@v5.4.0
-      with:
-        bump_each_commit: true
-        tag_prefix: ""
-        format: "${major}.${minor}.${patch}"
+    - name: Generate Version
+      run: |
+        LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.3.5")
+        echo "Last tag: $LAST_TAG"
+
+        # Extract version numbers
+        VERSION=${LAST_TAG#v}
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+        # Increment patch version
+        PATCH=$((PATCH + 1))
+        NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+
+        echo "New version: $NEW_VERSION"
+        echo "version_tag=$NEW_VERSION" >> $GITHUB_OUTPUT
+        echo "version=${MAJOR}.${MINOR}.${PATCH}" >> $GITHUB_OUTPUT
       id: semver
 
     - name: Set up Go
