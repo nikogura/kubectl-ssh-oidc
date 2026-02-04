@@ -106,6 +106,14 @@ jobs:
       with:
         fetch-depth: 0
 
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Build all platforms
+      run: make build-all VERSION=${{ needs.test.outputs.version_tag }}
+
     - name: Tag Repo
       uses: mathieudutour/github-tag-action@v6.2
       with:
@@ -119,4 +127,10 @@ jobs:
         name: ${{ needs.test.outputs.version_tag }}
         draft: false
         prerelease: false
+        files: |
+          bin/kubectl-ssh_oidc-linux-amd64
+          bin/kubectl-ssh_oidc-linux-arm64
+          bin/kubectl-ssh_oidc-darwin-amd64
+          bin/kubectl-ssh_oidc-darwin-arm64
+          bin/kubectl-ssh_oidc-windows-amd64.exe
         token: ${{ secrets.GITHUB_TOKEN }}
