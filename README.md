@@ -63,13 +63,19 @@ graph LR
 # Linux AMD64
 curl -L "https://github.com/nikogura/kubectl-ssh-oidc/releases/latest/download/kubectl-ssh_oidc-linux-amd64" -o kubectl-ssh-oidc
 
+# Linux ARM64 (Raspberry Pi, AWS Graviton, etc.)
+curl -L "https://github.com/nikogura/kubectl-ssh-oidc/releases/latest/download/kubectl-ssh_oidc-linux-arm64" -o kubectl-ssh-oidc
+
 # macOS AMD64 (Intel)
 curl -L "https://github.com/nikogura/kubectl-ssh-oidc/releases/latest/download/kubectl-ssh_oidc-darwin-amd64" -o kubectl-ssh-oidc
 
 # macOS ARM64 (Apple Silicon)
 curl -L "https://github.com/nikogura/kubectl-ssh-oidc/releases/latest/download/kubectl-ssh_oidc-darwin-arm64" -o kubectl-ssh-oidc
 
-# Make executable and install
+# Windows AMD64 (PowerShell)
+# curl.exe -L "https://github.com/nikogura/kubectl-ssh-oidc/releases/latest/download/kubectl-ssh_oidc-windows-amd64.exe" -o kubectl-ssh-oidc.exe
+
+# Make executable and install (Linux/macOS)
 chmod +x kubectl-ssh-oidc
 sudo mv kubectl-ssh-oidc /usr/local/bin/
 ```
