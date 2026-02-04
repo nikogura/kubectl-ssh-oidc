@@ -31,7 +31,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -326,7 +325,7 @@ func (c *UnifiedSSHClient) loadSSHKeyFromFile(keyPath string) (*SSHKey, error) {
 // loadEncryptedKey loads an encrypted SSH key with passphrase prompting.
 func (c *UnifiedSSHClient) loadEncryptedKey(keyBytes []byte, keyPath string) (ssh.Signer, error) {
 	// Determine if we're running interactively
-	if !term.IsTerminal(syscall.Stdin) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return nil, errors.New("key is encrypted but no TTY available for passphrase prompt")
 	}
 
@@ -334,7 +333,7 @@ func (c *UnifiedSSHClient) loadEncryptedKey(keyBytes []byte, keyPath string) (ss
 	for attempt := 1; attempt <= 3; attempt++ {
 		fmt.Fprintf(os.Stderr, "Enter passphrase for %s: ", keyPath)
 
-		passphrase, err := term.ReadPassword(syscall.Stdin)
+		passphrase, err := term.ReadPassword(int(os.Stdin.Fd()))
 		fmt.Fprintln(os.Stderr) // Print newline after password input
 
 		if err != nil {

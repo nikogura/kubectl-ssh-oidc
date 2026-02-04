@@ -98,15 +98,25 @@ func TestLoadConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Set environment variables
+			// Save USER before clearing (needed for getSystemUsername() fallback)
+			originalUser := os.Getenv("USER")
+
+			// Clear all config-related env vars to ensure test isolation
+			configEnvVars := []string{
+				"DEX_URL", "CLIENT_ID", "CLIENT_SECRET", "DEX_INSTANCE_ID",
+				"TARGET_AUDIENCE", "AUDIENCE", "CACHE_TOKENS", "KUBECTL_SSH_USER",
+				"SSH_KEY_PATHS", "SSH_USE_AGENT", "SSH_IDENTITIES_ONLY",
+			}
+			for _, key := range configEnvVars {
+				t.Setenv(key, "")
+			}
+			// Restore USER for getSystemUsername() to work
+			t.Setenv("USER", originalUser)
+
+			// Set environment variables for this specific test
 			for key, value := range tt.envVars {
 				t.Setenv(key, value)
 			}
-			defer func() {
-				for key := range tt.envVars {
-					os.Unsetenv(key)
-				}
-			}()
 
 			// Set command line args - using temporary override
 			originalArgs := make([]string, len(os.Args))
